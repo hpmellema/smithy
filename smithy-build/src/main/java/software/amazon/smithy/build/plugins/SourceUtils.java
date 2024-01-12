@@ -1,6 +1,8 @@
 package software.amazon.smithy.build.plugins;
 
 
+import java.io.File;
+import java.nio.file.Path;
 import java.util.Collection;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
@@ -21,6 +23,17 @@ class SourceUtils {
             return sourceFileNames.stream().map(name -> name.replace("\\", "/"))
                     .collect(Collectors.joining("\n"));
         }
+    }
+
+    public static String computeJarFilePrefix(String jarRoot, Path jarPath) {
+        Path jarFilenamePath = jarPath.getFileName();
+
+        if (jarFilenamePath == null) {
+            return jarRoot;
+        }
+
+        String jarFilename = jarFilenamePath.toString();
+        return jarRoot + jarFilename.substring(0, jarFilename.length() - ".jar".length()) + File.separator;
     }
 
 }

@@ -179,14 +179,13 @@ public final class JarPlugin implements SmithyBuildPlugin {
             } else if (Files.isRegularFile(current)) {
                 if (current.toString().endsWith(".jar")) {
                     // Account for just a simple file vs recursing into directories.
-                    String jarRoot = root.equals(current)
-                            ? "" : (root.relativize(current).toString() + File.separator);
+                    String jarRoot = root.equals(current) ? "" : (root.relativize(current) + File.separator);
                     // Copy Smithy models out of the JAR.
-                    copyModelsFromJar(names, manifest, jarRoot, current, output);
+                    copyModelsFromJar(names, jarRoot, current, output);
                 } else {
                     // Account for just a simple file vs recursing into directories.
                     Path target = root.equals(current) ? current.getFileName() : root.relativize(current);
-                    copyFileToJar(names, manifest, target, IoUtils.readUtf8File(current), output);
+                    copyFileToJar(names, target, IoUtils.readUtf8File(current), output);
                 }
             }
         } catch (IOException e) {
@@ -195,7 +194,6 @@ public final class JarPlugin implements SmithyBuildPlugin {
     }
 
     private static void copyFileToJar(List<String> names,
-                                      FileManifest manifest,
                                       Path target,
                                       String contents,
                                       JarOutputStream jarOutputStream
@@ -229,7 +227,6 @@ public final class JarPlugin implements SmithyBuildPlugin {
     }
 
     private static void copyModelsFromJar(List<String> names,
-                                          FileManifest manifest,
                                           String jarRoot,
                                           Path jarPath,
                                           JarOutputStream output
@@ -237,25 +234,14 @@ public final class JarPlugin implements SmithyBuildPlugin {
         LOGGER.fine(() -> "Copying models from JAR " + jarPath);
         URL manifestUrl = ModelDiscovery.createSmithyJarManifestUrl(jarPath.toString());
 
-        String prefix = computeJarFilePrefix(jarRoot, jarPath);
+        String prefix = SourceUtils.computeJarFilePrefix(jarRoot, jarPath);
         for (URL model : ModelDiscovery.findModels(manifestUrl)) {
             String name = ModelDiscovery.getSmithyModelPathFromJarUrl(model);
             Path target = Paths.get(prefix + name);
             LOGGER.finer(() -> "Copying " + name + " from JAR to " + target);
             try (InputStream is = model.openStream()) {
-                copyFileToJar(names, manifest, target, IoUtils.toUtf8String(is), output);
+                copyFileToJar(names, target, IoUtils.toUtf8String(is), output);
             }
         }
-    }
-
-    private static String computeJarFilePrefix(String jarRoot, Path jarPath) {
-        Path jarFilenamePath = jarPath.getFileName();
-
-        if (jarFilenamePath == null) {
-            return jarRoot;
-        }
-
-        String jarFilename = jarFilenamePath.toString();
-        return jarRoot + jarFilename.substring(0, jarFilename.length() - ".jar".length()) + File.separator;
     }
 }
