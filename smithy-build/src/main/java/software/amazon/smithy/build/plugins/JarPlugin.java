@@ -136,8 +136,12 @@ public final class JarPlugin implements SmithyBuildPlugin {
         Attributes attributes = manifest.getMainAttributes();
         attributes.put(Attributes.Name.MANIFEST_VERSION, "1.0");
         attributes.put(new Attributes.Name("Build-Timestamp"), new SimpleDateFormat(BUILD_TIMESTAMP_FORMAT).format(new Date()));
-        attributes.put(new Attributes.Name("Created-With"), "Smithy-Jar-Plugin");
+        attributes.put(new Attributes.Name("Created-With"), "Smithy-Jar-Plugin (" + getVersion() + ")");
         return manifest;
+    }
+
+    private static String getVersion() {
+        return IoUtils.readUtf8Resource(JarPlugin.class, "jar-plugin-version").trim();
     }
 
     private static List<String> copySources(PluginContext context, JarOutputStream jarOutputStream) {

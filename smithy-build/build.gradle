@@ -19,7 +19,19 @@ description = "This module is a library used to validate Smithy models, create f
 ext {
     displayName = "Smithy :: Build"
     moduleName = "software.amazon.smithy.build"
+    generatedResourcesDir = file("$buildDir/generated-resources")
 }
+
+// ------ Generate a file that contains the Smithy CLI version number. -------
+tasks.register('generateVersionFile') {
+    ext.versionFile = file("$generatedResourcesDir/software/amazon/smithy/build/plugins/jar-plugin-version")
+    outputs.file(versionFile)
+    doLast {
+        versionFile.text = "${project.version}"
+    }
+}
+sourceSets.main.output.dir generatedResourcesDir, builtBy: generateVersionFile
+
 
 dependencies {
     api project(":smithy-utils")
