@@ -15,7 +15,6 @@
 
 package software.amazon.smithy.build.plugins;
 
-import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -29,14 +28,15 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import software.amazon.smithy.build.FileManifest;
 import software.amazon.smithy.build.PluginContext;
@@ -44,10 +44,12 @@ import software.amazon.smithy.build.SmithyBuildPlugin;
 import software.amazon.smithy.model.Model;
 import software.amazon.smithy.model.loader.ModelDiscovery;
 import software.amazon.smithy.model.node.Node;
+import software.amazon.smithy.model.node.NodeMapper;
 import software.amazon.smithy.model.node.ObjectNode;
 import software.amazon.smithy.model.shapes.ModelSerializer;
 import software.amazon.smithy.utils.IoUtils;
 import software.amazon.smithy.utils.ListUtils;
+import software.amazon.smithy.utils.SmithyInternalApi;
 
 /**
  *
@@ -72,10 +74,15 @@ public final class JarPlugin implements SmithyBuildPlugin {
             return;
         }
 
+        NodeMapper mapper = new NodeMapper();
+        mapper.setWhenMissingSetter(NodeMapper.WhenMissing.IGNORE);
+        Settings settings = mapper.deserializeInto(context.getSettings(), new Settings());
+
         List<String> names;
         String projectionName = context.getProjectionName();
-        Manifest jarManifest = getBaseManifest();
-        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+        Manifest jarManifest = getJarManifest(settings);
+
+        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream(BUFFER_SIZE)) {
             JarOutputStream jarOutputStream = new JarOutputStream(outputStream, jarManifest);
             if (projectionName.equals("source")) {
                 // Copy sources directly.
@@ -91,17 +98,7 @@ public final class JarPlugin implements SmithyBuildPlugin {
                 projectSources(context, jarOutputStream);
             }
 
-            // Write the smithy manifest
-            String manifest = "";
-            if (names.isEmpty()) {
-                LOGGER.info(String.format("Writing empty `%s` manifest because no Smithy sources found",
-                        projectionName));
-            } else {
-                LOGGER.fine(() -> String.format("Writing `%s` manifest", projectionName));
-                // Normalize filenames to Unix style.
-                manifest = names.stream().map(name -> name.replace("\\", "/"))
-                        .collect(Collectors.joining("\n"));
-            }
+            String manifest = SourceUtils.writeSmithyManifest(names, projectionName);
             writeJarEntry("manifest", manifest, jarOutputStream);
             jarOutputStream.finish();
             context.getFileManifest().writeFile(projectionName + ".jar", new ByteArrayInputStream(outputStream.toByteArray()));
@@ -110,33 +107,52 @@ public final class JarPlugin implements SmithyBuildPlugin {
         }
     }
 
-    private static void writeJarEntry(String fileName, String inputString, JarOutputStream target) throws IOException {
-        writeJarEntry(fileName, new ByteArrayInputStream(inputString.getBytes(StandardCharsets.UTF_8)), target);
+    @SmithyInternalApi
+    public static final class Settings {
+        private List<String> tags = Collections.emptyList();
+        private Map<String, String> manifestHeaders = Collections.emptyMap();
+
+        public void tags(List<String> tags) {
+            this.tags = tags;
+        }
+
+        public void manifestHeaders(Map<String, String> manifestHeaders) {
+            this.manifestHeaders = manifestHeaders;
+        }
     }
 
-    private static void writeJarEntry(String fileName, InputStream inputStream, JarOutputStream target)
-            throws IOException {
+    private static void writeJarEntry(String fileName, String contents, JarOutputStream target) throws IOException {
+        try (InputStream inputStream = new ByteArrayInputStream(contents.getBytes(StandardCharsets.UTF_8))) {
+            writeJarEntry(fileName, inputStream, target);
+        }
+    }
+
+    private static void writeJarEntry(String fileName, InputStream inputStream, JarOutputStream target) throws IOException {
+        byte[] buffer = new byte[BUFFER_SIZE];
+        int bytesRead;
+
         target.putNextEntry(new JarEntry(JAR_FILE_PREFIX + fileName));
-        try (BufferedInputStream input = new BufferedInputStream(inputStream)) {
-            byte[] buffer = new byte[BUFFER_SIZE];
-            while (true) {
-                int count = input.read(buffer);
-                if (count <= 0) {
-                    break;
-                }
-                target.write(buffer, 0, count);
-            }
+        while ((bytesRead = inputStream.read(buffer)) != -1) {
+            target.write(buffer, 0, bytesRead);
         }
         target.closeEntry();
     }
 
-
-    private static Manifest getBaseManifest() {
+    private static Manifest getJarManifest(Settings settings) {
         final Manifest manifest = new Manifest();
         Attributes attributes = manifest.getMainAttributes();
         attributes.put(Attributes.Name.MANIFEST_VERSION, "1.0");
         attributes.put(new Attributes.Name("Build-Timestamp"), new SimpleDateFormat(BUILD_TIMESTAMP_FORMAT).format(new Date()));
         attributes.put(new Attributes.Name("Created-With"), "Smithy-Jar-Plugin (" + getVersion() + ")");
+
+        if (!settings.tags.isEmpty()) {
+            attributes.put(new Attributes.Name("Smithy-Tags"), String.join(",", settings.tags));
+        }
+
+        for (Map.Entry<String, String> headerEntry : settings.manifestHeaders.entrySet()) {
+            attributes.put(new Attributes.Name(headerEntry.getKey()), headerEntry.getValue());
+        }
+
         return manifest;
     }
 

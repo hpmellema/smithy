@@ -89,14 +89,7 @@ public final class SourcesPlugin implements SmithyBuildPlugin {
             projectSources(context);
         }
 
-        String manifest = "";
-        if (names.isEmpty()) {
-            LOGGER.info(String.format("Writing empty `%s` manifest because no Smithy sources found", projectionName));
-        } else {
-            LOGGER.fine(() -> String.format("Writing `%s` manifest", projectionName));
-            // Normalize filenames to Unix style.
-            manifest = names.stream().map(name -> name.replace("\\", "/")).collect(Collectors.joining("\n"));
-        }
+        String manifest = SourceUtils.writeSmithyManifest(names, projectionName);
         context.getFileManifest().writeFile("manifest", manifest + "\n");
     }
 
