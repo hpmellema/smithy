@@ -15,13 +15,19 @@
 
 package software.amazon.smithy.build.plugins;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
 import java.io.UncheckedIOException;
 import java.net.URL;
+import java.nio.BufferOverflowException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -80,10 +86,11 @@ public final class JarPlugin implements SmithyBuildPlugin {
 
         List<String> names;
         String projectionName = context.getProjectionName();
-        Manifest jarManifest = getJarManifest(settings);
 
-        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream(BUFFER_SIZE)) {
-            JarOutputStream jarOutputStream = new JarOutputStream(outputStream, jarManifest);
+        Path jarFilePath = context.getFileManifest().addFile(Paths.get(projectionName + ".jar"));
+        try (FileOutputStream fileOutputStream = new FileOutputStream(new File(jarFilePath.toUri()));
+             JarOutputStream jarOutputStream = new JarOutputStream(fileOutputStream, getJarManifest(settings));
+        ) {
             if (projectionName.equals("source")) {
                 // Copy sources directly.
                 names = copySources(context, jarOutputStream);
@@ -100,11 +107,10 @@ public final class JarPlugin implements SmithyBuildPlugin {
 
             String manifest = SourceUtils.writeSmithyManifest(names, projectionName);
             writeJarEntry("manifest", manifest, jarOutputStream);
-            jarOutputStream.finish();
-            context.getFileManifest().writeFile(projectionName + ".jar", new ByteArrayInputStream(outputStream.toByteArray()));
         } catch (IOException exc) {
             throw new UncheckedIOException(exc);
         }
+        context.getFileManifest().addFile(jarFilePath);
     }
 
     @SmithyInternalApi
