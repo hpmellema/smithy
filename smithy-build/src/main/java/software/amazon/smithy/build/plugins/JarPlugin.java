@@ -15,19 +15,13 @@
 
 package software.amazon.smithy.build.plugins;
 
-import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.PipedInputStream;
-import java.io.PipedOutputStream;
 import java.io.UncheckedIOException;
 import java.net.URL;
-import java.nio.BufferOverflowException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -58,7 +52,20 @@ import software.amazon.smithy.utils.ListUtils;
 import software.amazon.smithy.utils.SmithyInternalApi;
 
 /**
+ * Copies model sources into a JAR.
  *
+ * <p>Model sources are model components that were defined in one of the
+ * directories marked as "sources" in the original model or a model
+ * component that is found in the updated model but not the original model.
+ *
+ * <p>When a JAR is provided as a source, the models contained within the
+ * JAR are extracted into the sources directory under a directory with the
+ * same name as the JAR without the ".jar" extension; the JAR is not copied
+ * into the sources directory. For example, given a JAR at "/foo/baz.jar"
+ * that contains a "bar.smithy" file, a source will be created named
+ * "baz/bar.smithy".
+ *
+ * <p>This plugin can only run if an original model is provided.
  */
 public final class JarPlugin implements SmithyBuildPlugin {
     private static final String JAR_FILE_PREFIX = "META-INF/smithy/";
@@ -89,7 +96,7 @@ public final class JarPlugin implements SmithyBuildPlugin {
 
         Path jarFilePath = context.getFileManifest().addFile(Paths.get(projectionName + ".jar"));
         try (FileOutputStream fileOutputStream = new FileOutputStream(new File(jarFilePath.toUri()));
-             JarOutputStream jarOutputStream = new JarOutputStream(fileOutputStream, getJarManifest(settings));
+             JarOutputStream jarOutputStream = new JarOutputStream(fileOutputStream, getJarManifest(settings))
         ) {
             if (projectionName.equals("source")) {
                 // Copy sources directly.
@@ -110,7 +117,6 @@ public final class JarPlugin implements SmithyBuildPlugin {
         } catch (IOException exc) {
             throw new UncheckedIOException(exc);
         }
-        context.getFileManifest().addFile(jarFilePath);
     }
 
     @SmithyInternalApi
