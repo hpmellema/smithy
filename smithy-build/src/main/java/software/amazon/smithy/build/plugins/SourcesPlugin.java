@@ -89,7 +89,14 @@ public final class SourcesPlugin implements SmithyBuildPlugin {
             projectSources(context);
         }
 
-        String manifest = SourceUtils.writeSmithyManifest(names, projectionName);
+        String manifest = "";
+        if (names.isEmpty()) {
+            LOGGER.info(String.format("Writing empty `%s` manifest because no Smithy sources found", projectionName));
+        } else {
+            LOGGER.fine(() -> String.format("Writing `%s` manifest", projectionName));
+            // Normalize filenames to Unix style.
+            manifest = names.stream().map(name -> name.replace("\\", "/")).collect(Collectors.joining("\n"));
+        }
         context.getFileManifest().writeFile("manifest", manifest + "\n");
     }
 
@@ -110,7 +117,8 @@ public final class SourcesPlugin implements SmithyBuildPlugin {
             } else if (Files.isRegularFile(current)) {
                 if (current.toString().endsWith(".jar")) {
                     // Account for just a simple file vs recursing into directories.
-                    String jarRoot = root.equals(current) ? "" : (root.relativize(current) + File.separator);
+                    String jarRoot = root.equals(current)
+                            ? "" : (root.relativize(current).toString() + File.separator);
                     // Copy Smithy models out of the JAR.
                     copyModelsFromJar(names, manifest, jarRoot, current);
                 } else {
@@ -133,10 +141,10 @@ public final class SourcesPlugin implements SmithyBuildPlugin {
         if (manifest.hasFile(target)) {
             throw new SourcesConflictException(
                     "Source file conflict found when attempting to add `" + target + "` to the `sources` plugin "
-                    + "output. All sources must have unique filenames relative to the directories marked as a "
-                    + "'source'. The files and directories that make up sources are flattened into a single "
-                    + "directory and conflicts are not allowed. The manifest has the following files: "
-                    + ValidationUtils.tickedList(manifest.getFiles()));
+                            + "output. All sources must have unique filenames relative to the directories marked as a "
+                            + "'source'. The files and directories that make up sources are flattened into a single "
+                            + "directory and conflicts are not allowed. The manifest has the following files: "
+                            + ValidationUtils.tickedList(manifest.getFiles()));
         }
 
         String filename = target.toString();
@@ -170,7 +178,7 @@ public final class SourcesPlugin implements SmithyBuildPlugin {
         LOGGER.fine(() -> "Copying models from JAR " + jarPath);
         URL manifestUrl = ModelDiscovery.createSmithyJarManifestUrl(jarPath.toString());
 
-        String prefix = SourceUtils.computeJarFilePrefix(jarRoot, jarPath);
+        String prefix = computeJarFilePrefix(jarRoot, jarPath);
         for (URL model : ModelDiscovery.findModels(manifestUrl)) {
             String name = ModelDiscovery.getSmithyModelPathFromJarUrl(model);
             Path target = Paths.get(prefix + name);
@@ -179,5 +187,16 @@ public final class SourcesPlugin implements SmithyBuildPlugin {
                 copyFile(names, manifest, target, IoUtils.toUtf8String(is));
             }
         }
+    }
+
+    private static String computeJarFilePrefix(String jarRoot, Path jarPath) {
+        Path jarFilenamePath = jarPath.getFileName();
+
+        if (jarFilenamePath == null) {
+            return jarRoot;
+        }
+
+        String jarFilename = jarFilenamePath.toString();
+        return jarRoot + jarFilename.substring(0, jarFilename.length() - ".jar".length()) + File.separator;
     }
 }
