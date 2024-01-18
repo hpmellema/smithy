@@ -206,6 +206,11 @@ public final class JarPlugin implements SmithyBuildPlugin {
         artifactId.appendChild(doc.createTextNode(settings.artifactId));
         project.appendChild(artifactId);
 
+        // artifactId
+        Element groupdId = doc.createElement("groupId");
+        groupdId.appendChild(doc.createTextNode(settings.groupId));
+        project.appendChild(groupdId);
+
         // version
         Element version = doc.createElement("version");
         version.appendChild(doc.createTextNode(settings.version));
@@ -220,6 +225,7 @@ public final class JarPlugin implements SmithyBuildPlugin {
             for (String coordinate : settings.requires) {
                 String[] coords = parseCoordinates(coordinate);
                 Element dependency = doc.createElement("dependency");
+
                 Element depGroup = doc.createElement("groupId");
                 depGroup.appendChild(doc.createTextNode(coords[0]));
                 dependency.appendChild(depGroup);
