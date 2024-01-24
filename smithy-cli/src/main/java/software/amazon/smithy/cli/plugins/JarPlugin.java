@@ -13,9 +13,8 @@
  * permissions and limitations under the License.
  */
 
-package software.amazon.smithy.jar;
+package software.amazon.smithy.cli.plugins;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -44,22 +43,23 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import software.amazon.smithy.build.FileManifest;
 import software.amazon.smithy.build.PluginContext;
+import software.amazon.smithy.build.SmithyBuildException;
 import software.amazon.smithy.build.SmithyBuildPlugin;
 import software.amazon.smithy.build.plugins.SourcesPlugin;
+import software.amazon.smithy.cli.SmithyCli;
 import software.amazon.smithy.model.node.NodeMapper;
-import software.amazon.smithy.utils.IoUtils;
 import software.amazon.smithy.utils.SmithyInternalApi;
 
 /**
  * Copies model sources into a JAR.
- *
- * // TODO: ADD FULL DOCS
+ * <p>
+ * TODO: ADD FULL DOCS
  * <p>This plugin can only run if an original model is provided.
  */
 public final class JarPlugin implements SmithyBuildPlugin {
     private static final int BUFFER_SIZE = 1024;
     private static final String BUILD_TIMESTAMP_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSSZ";
-    private static final String NAME = "library-jar";
+    private static final String NAME = "jar";
 
     @Override
     public String getName() {
@@ -99,7 +99,7 @@ public final class JarPlugin implements SmithyBuildPlugin {
         }
     }
 
-    // TODO: Move to separate class or at least fix.
+    // TODO: Update to match required inputs.
     @SmithyInternalApi
     public static final class Settings {
         private String artifactId;
@@ -149,80 +149,117 @@ public final class JarPlugin implements SmithyBuildPlugin {
     }
 
     private static String getPomPropertiesContents(Settings settings) {
-        return  "#Created by Smithy Jar Plugin " + getVersion() + "\n"
+        return  "#Created by Smithy Jar Plugin " + SmithyCli.getVersion() + "\n"
                 + "groupId=" + settings.groupId + "\n"
                 + "artifactId=" + settings.artifactId + "\n"
                 + "version=" + settings.version + "\n";
     }
 
     private static void writePomXml(Path pomPath, Settings settings) {
-        /**
-         * <?xml version="1.0" encoding="UTF-8"?>
-         * <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         *   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-         *   <modelVersion>4.0.0</modelVersion>
-         *   <groupId>com.mycompany.app</groupId>
-         *   <artifactId>my-app</artifactId>
-         *   <version>1.0-SNAPSHOT</version>
-         *   <dependencies>
-         *     <dependency>
-         *       <groupId>junit</groupId>
-         *       <artifactId>junit</artifactId>
-         *       <version>[4.0,5.0)</version>
-         *       <scope>runtime</scope>
-         *     </dependency>
-         *   </dependencies>
-         * </project>
-         */
-        // TODO: extract out into helper class
-        DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
-        Document doc;
-        try {
-            DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
-            doc = dBuilder.newDocument();
-        } catch (ParserConfigurationException e) {
-            throw new RuntimeException(e);
+        PomFile pom = new PomFile();
+        pom.addBaseArtifact(settings.artifactId, settings.groupId, settings.version);
+        pom.addDependencies(settings.requires);
+        pom.write(pomPath);
+    }
+
+    private static void writeJarEntry(String fileName, Path path, JarOutputStream target) throws IOException {
+        try (InputStream is = Files.newInputStream(path)) {
+            writeJarEntry(fileName, is, target);
+        }
+    }
+
+    private static void writeJarEntry(String fileName, InputStream inputStream, JarOutputStream target)
+            throws IOException {
+        byte[] buffer = new byte[BUFFER_SIZE];
+        int bytesRead;
+
+        target.putNextEntry(new JarEntry(fileName));
+        while ((bytesRead = inputStream.read(buffer)) != -1) {
+            target.write(buffer, 0, bytesRead);
+        }
+        target.closeEntry();
+    }
+
+    private static Manifest getJarManifest(Settings settings) {
+        final Manifest manifest = new Manifest();
+        Attributes attributes = manifest.getMainAttributes();
+        attributes.put(Attributes.Name.MANIFEST_VERSION, "1.0");
+        attributes.put(new Attributes.Name("Build-Timestamp"),
+                new SimpleDateFormat(BUILD_TIMESTAMP_FORMAT).format(new Date()));
+        attributes.put(new Attributes.Name("Created-With"), "Smithy-Jar-Plugin (" + SmithyCli.getVersion() + ")");
+
+        if (!settings.tags.isEmpty()) {
+            attributes.put(new Attributes.Name("Smithy-Tags"), String.join(",", settings.tags));
         }
 
-        // project element
-        Element project = doc.createElement("project");
-        Attr xmlns = doc.createAttribute("xmlns");
-        xmlns.setValue("http://maven.apache.org/POM/4.0.0");
-        project.setAttributeNode(xmlns);
-        Attr xmlnsXsi = doc.createAttribute("xmlns:xsi");
-        xmlnsXsi.setValue("http://www.w3.org/2001/XMLSchema-instance");
-        project.setAttributeNode(xmlnsXsi);
-        Attr xsiSchemaLocation = doc.createAttribute("xsi:schemaLocation");
-        xsiSchemaLocation.setValue("http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd");
-        project.setAttributeNode(xsiSchemaLocation);
+        for (Map.Entry<String, String> headerEntry : settings.manifestHeaders.entrySet()) {
+            attributes.put(new Attributes.Name(headerEntry.getKey()), headerEntry.getValue());
+        }
 
-        // model version
-        Element modelVersion = doc.createElement("modelVersion");
-        modelVersion.appendChild(doc.createTextNode("4.0.0"));
-        project.appendChild(modelVersion);
+        return manifest;
+    }
 
-        // artifactId
-        Element artifactId = doc.createElement("artifactId");
-        artifactId.appendChild(doc.createTextNode(settings.artifactId));
-        project.appendChild(artifactId);
+    private static final class PomFile {
+        private final Document doc = createBaseDocument();
+        private final Element project;
 
-        // artifactId
-        Element groupdId = doc.createElement("groupId");
-        groupdId.appendChild(doc.createTextNode(settings.groupId));
-        project.appendChild(groupdId);
+        PomFile() {
+            // Add all base elements
+            // project element
+            project = doc.createElement("project");
+            Attr xmlns = doc.createAttribute("xmlns");
+            xmlns.setValue("http://maven.apache.org/POM/4.0.0");
+            project.setAttributeNode(xmlns);
+            Attr xmlnsXsi = doc.createAttribute("xmlns:xsi");
+            xmlnsXsi.setValue("http://www.w3.org/2001/XMLSchema-instance");
+            project.setAttributeNode(xmlnsXsi);
+            Attr xsiSchemaLocation = doc.createAttribute("xsi:schemaLocation");
+            xsiSchemaLocation.setValue("http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd");
+            project.setAttributeNode(xsiSchemaLocation);
 
-        // version
-        Element version = doc.createElement("version");
-        version.appendChild(doc.createTextNode(settings.version));
-        project.appendChild(version);
+            // model version
+            Element modelVersion = doc.createElement("modelVersion");
+            modelVersion.appendChild(doc.createTextNode("4.0.0"));
+            project.appendChild(modelVersion);
+        }
 
-        // dependencies element
-        if (settings.requires != null && !settings.requires.isEmpty()) {
+
+        private static Document createBaseDocument() {
+            try {
+                DocumentBuilder dBuilder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
+                return dBuilder.newDocument();
+            } catch (ParserConfigurationException e) {
+                throw new SmithyBuildException(e);
+            }
+        }
+
+        void addBaseArtifact(String artifactId, String groupId, String version) {
+            // artifactId
+            Element artifactIdNode = doc.createElement("artifactId");
+            artifactIdNode.appendChild(doc.createTextNode(artifactId));
+            project.appendChild(artifactIdNode);
+
+            Element groupIdNode = doc.createElement("groupId");
+            groupIdNode.appendChild(doc.createTextNode(groupId));
+            project.appendChild(groupIdNode);
+
+            // version
+            Element versionNode = doc.createElement("version");
+            versionNode.appendChild(doc.createTextNode(version));
+            project.appendChild(versionNode);
+        }
+
+        void addDependencies(List<String> dependencyCoordinates) {
+            if (dependencyCoordinates == null || dependencyCoordinates.isEmpty()) {
+                return;
+            }
+
             Element scope = doc.createElement("scope");
             scope.appendChild(doc.createTextNode("runtime"));
-
             Element deps = doc.createElement("dependencies");
-            for (String coordinate : settings.requires) {
+            project.appendChild(deps);
+
+            for (String coordinate : dependencyCoordinates) {
                 String[] coords = parseCoordinates(coordinate);
                 Element dependency = doc.createElement("dependency");
 
@@ -241,70 +278,30 @@ public final class JarPlugin implements SmithyBuildPlugin {
                 dependency.appendChild(scope);
                 deps.appendChild(dependency);
             }
-            project.appendChild(deps);
         }
 
-        doc.appendChild(project);
-
-        try {
-            // write the content into xml file
-            TransformerFactory transformerFactory = TransformerFactory.newInstance();
-            Transformer transformer = transformerFactory.newTransformer();
-            DOMSource source = new DOMSource(doc);
-            StreamResult result = new StreamResult(Files.newOutputStream(pomPath));
-            transformer.transform(source, result);
-        } catch (TransformerException e) {
-            throw new RuntimeException(e);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-    }
-
-    private static void writeJarEntry(String fileName, Path path, JarOutputStream target) throws IOException {
-        try (InputStream is = Files.newInputStream(path)) {
-            writeJarEntry(fileName, is, target);
-        }
-    }
-
-    private static void writeJarEntry(String fileName, InputStream inputStream, JarOutputStream target) throws IOException {
-        byte[] buffer = new byte[BUFFER_SIZE];
-        int bytesRead;
-
-        target.putNextEntry(new JarEntry(fileName));
-        while ((bytesRead = inputStream.read(buffer)) != -1) {
-            target.write(buffer, 0, bytesRead);
-        }
-        target.closeEntry();
-    }
-
-    private static Manifest getJarManifest(Settings settings) {
-        final Manifest manifest = new Manifest();
-        Attributes attributes = manifest.getMainAttributes();
-        attributes.put(Attributes.Name.MANIFEST_VERSION, "1.0");
-        attributes.put(new Attributes.Name("Build-Timestamp"), new SimpleDateFormat(BUILD_TIMESTAMP_FORMAT).format(new Date()));
-        attributes.put(new Attributes.Name("Created-With"), "Smithy-Jar-Plugin (" + getVersion() + ")");
-
-        if (!settings.tags.isEmpty()) {
-            attributes.put(new Attributes.Name("Smithy-Tags"), String.join(",", settings.tags));
+        private static String[] parseCoordinates(String coordinates) {
+            String[] parts = coordinates.split(":");
+            if (parts.length != 3) {
+                throw new SmithyBuildException("Invalid Maven coordinates: " + coordinates);
+            }
+            return parts;
         }
 
-        for (Map.Entry<String, String> headerEntry : settings.manifestHeaders.entrySet()) {
-            attributes.put(new Attributes.Name(headerEntry.getKey()), headerEntry.getValue());
+        void write(Path pomPath) {
+            doc.appendChild(project);
+            try {
+                // write the content into xml file
+                TransformerFactory transformerFactory = TransformerFactory.newInstance();
+                Transformer transformer = transformerFactory.newTransformer();
+                DOMSource source = new DOMSource(doc);
+                StreamResult result = new StreamResult(Files.newOutputStream(pomPath));
+                transformer.transform(source, result);
+            } catch (TransformerException e) {
+                throw new RuntimeException(e);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
         }
-
-        return manifest;
-    }
-
-    // TODO: better exception
-    private static String[] parseCoordinates(String coordinates) {
-        String[] parts = coordinates.split(":");
-        if (parts.length != 3) {
-            throw new RuntimeException("Invalid Maven coordinates: " + coordinates);
-        }
-        return parts;
-    }
-
-    private static String getVersion() {
-        return IoUtils.readUtf8Resource(JarPlugin.class, "jar-plugin-version").trim();
     }
 }
