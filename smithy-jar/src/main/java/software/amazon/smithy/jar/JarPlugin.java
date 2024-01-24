@@ -13,7 +13,7 @@
  * permissions and limitations under the License.
  */
 
-package software.amazon.smithy.cli.plugins;
+package software.amazon.smithy.jar;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -46,10 +46,11 @@ import software.amazon.smithy.build.PluginContext;
 import software.amazon.smithy.build.SmithyBuildException;
 import software.amazon.smithy.build.SmithyBuildPlugin;
 import software.amazon.smithy.build.plugins.SourcesPlugin;
-import software.amazon.smithy.cli.SmithyCli;
 import software.amazon.smithy.model.node.NodeMapper;
+import software.amazon.smithy.utils.IoUtils;
 import software.amazon.smithy.utils.SmithyInternalApi;
 
+// TODO: add tests
 /**
  * Copies model sources into a JAR.
  * <p>
@@ -149,7 +150,7 @@ public final class JarPlugin implements SmithyBuildPlugin {
     }
 
     private static String getPomPropertiesContents(Settings settings) {
-        return  "#Created by Smithy Jar Plugin " + SmithyCli.getVersion() + "\n"
+        return  "#Created by Smithy Jar Plugin " + getVersion() + "\n"
                 + "groupId=" + settings.groupId + "\n"
                 + "artifactId=" + settings.artifactId + "\n"
                 + "version=" + settings.version + "\n";
@@ -186,7 +187,7 @@ public final class JarPlugin implements SmithyBuildPlugin {
         attributes.put(Attributes.Name.MANIFEST_VERSION, "1.0");
         attributes.put(new Attributes.Name("Build-Timestamp"),
                 new SimpleDateFormat(BUILD_TIMESTAMP_FORMAT).format(new Date()));
-        attributes.put(new Attributes.Name("Created-With"), "Smithy-Jar-Plugin (" + SmithyCli.getVersion() + ")");
+        attributes.put(new Attributes.Name("Created-With"), "Smithy-Jar-Plugin (" + getVersion() + ")");
 
         if (!settings.tags.isEmpty()) {
             attributes.put(new Attributes.Name("Smithy-Tags"), String.join(",", settings.tags));
@@ -197,6 +198,10 @@ public final class JarPlugin implements SmithyBuildPlugin {
         }
 
         return manifest;
+    }
+
+    private static String getVersion() {
+        return IoUtils.readUtf8Resource(JarPlugin.class, "jar-plugin-version").trim();
     }
 
     private static final class PomFile {
