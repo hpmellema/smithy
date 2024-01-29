@@ -16,6 +16,7 @@
 package software.amazon.smithy.build.model;
 
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -34,11 +35,13 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
             "include", "include-at", "tags", "manifest-headers", "pom-data");
     private static final String INCLUDE_AT = "include-at";
     private static final String MANIFEST_HEADERS = "manifest-headers";
+    private static final String SOURCES_PLUGIN = "sources";
+    private static final String SMITHY_META_INF_LOCATION = "META-INF/smithy";
     private final String artifactId;
     private final String groupId;
     private final String version;
     private final Set<String> include;
-    private final Map<String, String> includeAt;
+    private final Map<String, String> includeAt = new LinkedHashMap<>();
     private final Set<String> tags;
     private final Map<String, String> manifestHeaders;
     private final ObjectNode pomData;
@@ -49,9 +52,13 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
         this.version = builder.version;
         this.include = builder.include.copy();
         this.tags = builder.tags.copy();
-        this.includeAt = builder.includeAt.copy();
+        this.includeAt.putAll(builder.includeAt.copy());
         this.manifestHeaders = builder.manifestHeaders.copy();
         this.pomData = builder.pomData;
+
+        // Always add the base mapping of the sources projection to the
+        // META-INF/smithy/ directory if no other mapping is defined
+        includeAt.putIfAbsent(SOURCES_PLUGIN, SMITHY_META_INF_LOCATION);
     }
 
     public static PackagingConfig fromNode(Node node) {
@@ -160,6 +167,7 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
         private final BuilderRef<Map<String, String>> includeAt = BuilderRef.forOrderedMap();
         private final BuilderRef<Set<String>> tags = BuilderRef.forOrderedSet();
         private final BuilderRef<Map<String, String>> manifestHeaders = BuilderRef.forOrderedMap();
+
         private ObjectNode pomData;
 
         private Builder() {}
