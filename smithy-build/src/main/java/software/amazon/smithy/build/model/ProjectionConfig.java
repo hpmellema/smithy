@@ -35,11 +35,14 @@ public final class ProjectionConfig implements ToSmithyBuilder<ProjectionConfig>
     private final List<TransformConfig> transforms;
     private final Map<String, ObjectNode> plugins;
 
+    private final PackagingConfig packaging;
+
     private ProjectionConfig(Builder builder) {
         this.imports = builder.imports.copy();
         this.transforms = builder.transforms.copy();
         this.isAbstract = builder.isAbstract;
         this.plugins = builder.plugins.copy();
+        this.packaging = builder.packaging;
 
         if (isAbstract && (!plugins.isEmpty() || !imports.isEmpty())) {
             throw new SmithyBuildException("Abstract projections must not define plugins or imports");
@@ -55,6 +58,7 @@ public final class ProjectionConfig implements ToSmithyBuilder<ProjectionConfig>
         return builder()
                 .imports(imports)
                 .plugins(plugins)
+                .packaging(packaging)
                 .transforms(transforms)
                 .setAbstract(isAbstract);
     }
@@ -74,7 +78,8 @@ public final class ProjectionConfig implements ToSmithyBuilder<ProjectionConfig>
                     for (Map.Entry<String, Node> entry : plugins.getStringMap().entrySet()) {
                         builder.plugins.get().put(entry.getKey(), entry.getValue().expectObjectNode());
                     }
-                });
+                })
+                .getObjectMember("packaging", PackagingConfig::fromNode);
         return builder.build();
     }
 
@@ -116,6 +121,7 @@ public final class ProjectionConfig implements ToSmithyBuilder<ProjectionConfig>
         private final BuilderRef<List<String>> imports = BuilderRef.forList();
         private final BuilderRef<List<TransformConfig>> transforms = BuilderRef.forList();
         private final BuilderRef<Map<String, ObjectNode>> plugins = BuilderRef.forOrderedMap();
+        private PackagingConfig packaging;
 
         private Builder() {}
 
@@ -174,6 +180,17 @@ public final class ProjectionConfig implements ToSmithyBuilder<ProjectionConfig>
         public Builder plugins(Map<String, ObjectNode> plugins) {
             this.plugins.clear();
             this.plugins.get().putAll(plugins);
+            return this;
+        }
+
+        /**
+         * Replaces the packaging configuration of the projection.
+         *
+         * @param packaging packaging configuration settings.
+         * @return Returns the builder.
+         */
+        public Builder packaging(PackagingConfig packaging) {
+            this.packaging = packaging;
             return this;
         }
     }

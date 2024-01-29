@@ -47,6 +47,7 @@ public final class SmithyBuildConfig implements ToSmithyBuilder<SmithyBuildConfi
     private final Map<String, ObjectNode> plugins;
     private final boolean ignoreMissingPlugins;
     private final MavenConfig maven;
+    private final PackagingConfig packaging;
     private final long lastModifiedInMillis;
 
     private SmithyBuildConfig(Builder builder) {
@@ -57,6 +58,7 @@ public final class SmithyBuildConfig implements ToSmithyBuilder<SmithyBuildConfi
         imports = builder.imports.copy();
         projections = builder.projections.copy();
         plugins = builder.plugins.copy();
+        packaging = builder.packaging;
         ignoreMissingPlugins = builder.ignoreMissingPlugins;
         maven = builder.maven;
         lastModifiedInMillis = builder.lastModifiedInMillis;
@@ -139,6 +141,7 @@ public final class SmithyBuildConfig implements ToSmithyBuilder<SmithyBuildConfi
                 .imports(imports)
                 .projections(projections)
                 .plugins(plugins)
+                .packaging(packaging)
                 .ignoreMissingPlugins(ignoreMissingPlugins)
                 .maven(maven);
     }
@@ -229,6 +232,19 @@ public final class SmithyBuildConfig implements ToSmithyBuilder<SmithyBuildConfi
     }
 
     /**
+     * Gets packaging configuration.
+     *
+     * <p>Note that smithy-build does not directly package outputs.
+     * It's up to other packages like the Smithy CLI to execute packaging
+     * based on this configuration.
+     *
+     * @return Returns packaging configuration.
+     */
+    public Optional<PackagingConfig> getPackaging() {
+        return Optional.ofNullable(packaging);
+    }
+
+    /**
      * Get the last modified time of the configuration file.
      *
      * @return Returns the last modified time in milliseconds since the epoch.
@@ -249,6 +265,7 @@ public final class SmithyBuildConfig implements ToSmithyBuilder<SmithyBuildConfi
         private String outputDirectory;
         private boolean ignoreMissingPlugins;
         private MavenConfig maven;
+        private PackagingConfig packaging;
         private long lastModifiedInMillis = 0;
 
         Builder() {}
@@ -313,6 +330,7 @@ public final class SmithyBuildConfig implements ToSmithyBuilder<SmithyBuildConfi
                             plugins.get().put(entry.getKey(), entry.getValue().expectObjectNode());
                         }
                     })
+                    .getObjectMember("packaging", p -> packaging = PackagingConfig.fromNode(p))
                     .getBooleanMember("ignoreMissingPlugins", this::ignoreMissingPlugins)
                     .getMember("maven", MavenConfig::fromNode, this::maven);
             return this;
@@ -420,6 +438,11 @@ public final class SmithyBuildConfig implements ToSmithyBuilder<SmithyBuildConfi
 
         public Builder maven(MavenConfig maven) {
             this.maven = maven;
+            return this;
+        }
+
+        public Builder packaging(PackagingConfig packaging) {
+            this.packaging = packaging;
             return this;
         }
 
