@@ -16,7 +16,6 @@
 package software.amazon.smithy.build.model;
 
 import java.util.Collection;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -32,16 +31,11 @@ import software.amazon.smithy.utils.ToSmithyBuilder;
 
 public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
     private static final List<String> PROPERTIES = ListUtils.of("artifactId", "groupId", "version",
-            "include", "include-at", "tags", "manifest-headers", "pom-data");
-    private static final String INCLUDE_AT = "include-at";
+            "tags", "manifest-headers", "pom-data");
     private static final String MANIFEST_HEADERS = "manifest-headers";
-    private static final String SOURCES_PLUGIN = "sources";
-    private static final String SMITHY_META_INF_LOCATION = "META-INF/smithy";
     private final String artifactId;
     private final String groupId;
     private final String version;
-    private final Set<String> include;
-    private final Map<String, String> includeAt = new LinkedHashMap<>();
     private final Set<String> tags;
     private final Map<String, String> manifestHeaders;
     private final ObjectNode pomData;
@@ -50,15 +44,9 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
         this.artifactId = builder.artifactId;
         this.groupId = builder.groupId;
         this.version = builder.version;
-        this.include = builder.include.copy();
         this.tags = builder.tags.copy();
-        this.includeAt.putAll(builder.includeAt.copy());
         this.manifestHeaders = builder.manifestHeaders.copy();
         this.pomData = builder.pomData;
-
-        // Always add the base mapping of the sources projection to the
-        // META-INF/smithy/ directory if no other mapping is defined
-        includeAt.putIfAbsent(SOURCES_PLUGIN, SMITHY_META_INF_LOCATION);
     }
 
     public static PackagingConfig fromNode(Node node) {
@@ -68,21 +56,14 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
                 .getStringMember("artifactId", builder::artifactId)
                 .getStringMember("groupId", builder::groupId)
                 .getStringMember("version", builder::version)
-                .getArrayMember("include", StringNode::getValue, builder::include)
                 .getArrayMember("tags", StringNode::getValue, builder::tags)
                 .getObjectMember("pom-data", builder::pomData);
-
-        if (objectNode.containsMember(INCLUDE_AT)) {
-            for (Map.Entry<String, Node> entry : objectNode.expectObjectMember(INCLUDE_AT).getStringMap().entrySet()) {
-                builder.putIncludeAt(entry.getKey(), entry.getValue().expectStringNode().getValue());
-            }
-        }
 
         if (objectNode.containsMember(MANIFEST_HEADERS)) {
             for (Map.Entry<String, Node> entry : objectNode.expectObjectMember(MANIFEST_HEADERS)
                     .getStringMap().entrySet()
             ) {
-                builder.putIncludeAt(entry.getKey(), entry.getValue().expectStringNode().getValue());
+                builder.putManifestHeader(entry.getKey(), entry.getValue().expectStringNode().getValue());
             }
         }
 
@@ -96,7 +77,6 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
         other.getGroupId().ifPresent(builder::groupId);
         other.getVersion().ifPresent(builder::version);
         builder.tags.get().addAll(other.getTags());
-        builder.include.get().addAll(other.include);
         builder.manifestHeaders.get().putAll(other.getManifestHeaders());
 
         if (other.getPomData().isPresent()) {
@@ -117,8 +97,6 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
         return builder().artifactId(artifactId)
                 .groupId(groupId)
                 .version(version)
-                .include(include)
-                .includeAt(includeAt)
                 .tags(tags)
                 .pomData(pomData)
                 .manifestHeaders(manifestHeaders);
@@ -134,14 +112,6 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
 
     public Optional<String> getVersion() {
         return Optional.ofNullable(version);
-    }
-
-    public Set<String> getInclude() {
-        return include;
-    }
-
-    public Map<String, String> getIncludeAt() {
-        return includeAt;
     }
 
     public Set<String> getTags() {
@@ -168,8 +138,6 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
         return Objects.equals(artifactId, that.artifactId)
                 && Objects.equals(groupId, that.groupId)
                 && Objects.equals(version, that.version)
-                && Objects.equals(include, that.include)
-                && Objects.equals(includeAt, that.includeAt)
                 && Objects.equals(tags, that.tags)
                 && Objects.equals(manifestHeaders, that.manifestHeaders)
                 && Objects.equals(pomData, that.pomData);
@@ -177,7 +145,7 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
 
     @Override
     public int hashCode() {
-        return Objects.hash(artifactId, groupId, version, include, includeAt, tags, manifestHeaders, pomData);
+        return Objects.hash(artifactId, groupId, version, tags, manifestHeaders, pomData);
     }
 
 
@@ -186,8 +154,6 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
         private String groupId;
         private String version;
 
-        private final BuilderRef<Set<String>> include = BuilderRef.forOrderedSet();
-        private final BuilderRef<Map<String, String>> includeAt = BuilderRef.forOrderedMap();
         private final BuilderRef<Set<String>> tags = BuilderRef.forOrderedSet();
         private final BuilderRef<Map<String, String>> manifestHeaders = BuilderRef.forOrderedMap();
 
@@ -212,23 +178,6 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
 
         public Builder version(String version) {
             this.version = version;
-            return this;
-        }
-
-        public Builder include(Collection<String> include) {
-            this.include.clear();
-            this.include.get().addAll(include);
-            return this;
-        }
-
-        public Builder putIncludeAt(String key, String value) {
-            this.includeAt.get().put(key, value);
-            return this;
-        }
-
-        public Builder includeAt(Map<String, String> includeAt) {
-            this.includeAt.clear();
-            this.includeAt.get().putAll(includeAt);
             return this;
         }
 

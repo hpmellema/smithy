@@ -22,9 +22,7 @@ public class PackagingConfigTest {
         assertThat(config.getVersion().isPresent(), is(false));
         assertThat(config.getGroupId().isPresent(), is(false));
         assertThat(config.getTags(), emptyIterable());
-        assertThat(config.getInclude(), emptyIterable());
         assertThat(config.getPomData().isPresent(), is(false));
-        assertThat(config.getIncludeAt(), hasEntry("sources", "META-INF/smithy"));
         assertThat(config.getManifestHeaders(), anEmptyMap());
     }
 
@@ -40,9 +38,7 @@ public class PackagingConfigTest {
         assertThat(config.getGroupId().get(), is("com.example.smithy"));
         assertThat(config.getVersion().get(), is("1.0.1"));
         assertThat(config.getTags(), emptyIterable());
-        assertThat(config.getInclude(), emptyIterable());
         assertThat(config.getPomData().isPresent(), is(false));
-        assertThat(config.getIncludeAt(), hasEntry("sources", "META-INF/smithy"));
         assertThat(config.getManifestHeaders(), anEmptyMap());
     }
 
@@ -61,9 +57,7 @@ public class PackagingConfigTest {
         assertThat(config.getGroupId().get(), is("com.example.smithy"));
         assertThat(config.getVersion().get(), is("1.0.1"));
         assertThat(config.getTags(), emptyIterable());
-        assertThat(config.getInclude(), emptyIterable());
         assertThat(config.getPomData().isPresent(), is(false));
-        assertThat(config.getIncludeAt(), hasEntry("sources", "other/location"));
         assertThat(config.getManifestHeaders(), anEmptyMap());
     }
 
