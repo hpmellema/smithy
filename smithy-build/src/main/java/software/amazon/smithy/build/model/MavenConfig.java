@@ -26,20 +26,22 @@ import software.amazon.smithy.utils.SmithyBuilder;
 import software.amazon.smithy.utils.ToSmithyBuilder;
 
 public final class MavenConfig implements ToSmithyBuilder<MavenConfig> {
-
     private final Set<String> dependencies;
+    private final Set<String> buildPlugins;
     private final Set<MavenRepository> repositories;
 
     private MavenConfig(Builder builder) {
         this.dependencies = builder.dependencies.copy();
+        this.buildPlugins = builder.buildPlugins.copy();
         this.repositories =  builder.repositories.copy();
     }
 
     public static MavenConfig fromNode(Node node) {
         MavenConfig.Builder builder = builder();
         node.expectObjectNode()
-                .warnIfAdditionalProperties(ListUtils.of("dependencies", "repositories"))
+                .warnIfAdditionalProperties(ListUtils.of("dependencies", "build-plugins", "repositories"))
                 .getArrayMember("dependencies", StringNode::getValue, builder::dependencies)
+                .getArrayMember("build-plugins", StringNode::getValue, builder::buildPlugins)
                 .getArrayMember("repositories", MavenRepository::fromNode, builder::repositories);
         return builder.build();
     }
@@ -66,10 +68,19 @@ public final class MavenConfig implements ToSmithyBuilder<MavenConfig> {
         return dependencies;
     }
 
+    /**
+     * Gets the build plugin dependencies.
+     *
+     * @return Returns the build plugins in an insertion ordered set.
+     */
+    public Set<String> getBuildPlugins() {
+        return buildPlugins;
+    }
+
     public MavenConfig merge(MavenConfig other) {
         MavenConfig.Builder builder = toBuilder();
         builder.dependencies.get().addAll(other.getDependencies());
-
+        builder.buildPlugins.get().addAll(other.getBuildPlugins());
         if (other.repositories != null) {
             builder.repositories.get().addAll(other.repositories);
         }
@@ -79,12 +90,14 @@ public final class MavenConfig implements ToSmithyBuilder<MavenConfig> {
 
     @Override
     public Builder toBuilder() {
-        return builder().repositories(repositories).dependencies(dependencies);
+        return builder().repositories(repositories)
+                .buildPlugins(buildPlugins)
+                .dependencies(dependencies);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(dependencies, repositories);
+        return Objects.hash(dependencies, buildPlugins, repositories);
     }
 
     @Override
@@ -96,11 +109,14 @@ public final class MavenConfig implements ToSmithyBuilder<MavenConfig> {
         }
 
         MavenConfig other = (MavenConfig) obj;
-        return dependencies.equals(other.dependencies) && Objects.equals(repositories, other.repositories);
+        return dependencies.equals(other.dependencies)
+                && Objects.equals(buildPlugins, other.buildPlugins)
+                && Objects.equals(repositories, other.repositories);
     }
 
     public static final class Builder implements SmithyBuilder<MavenConfig> {
         private final BuilderRef<Set<String>> dependencies = BuilderRef.forOrderedSet();
+        private final BuilderRef<Set<String>> buildPlugins = BuilderRef.forOrderedSet();
         private final BuilderRef<Set<MavenRepository>> repositories = BuilderRef.forOrderedSet();
 
         private Builder() {}
@@ -113,6 +129,12 @@ public final class MavenConfig implements ToSmithyBuilder<MavenConfig> {
         public Builder dependencies(Collection<String> dependencies) {
             this.dependencies.clear();
             this.dependencies.get().addAll(dependencies);
+            return this;
+        }
+
+        public Builder buildPlugins(Collection<String> buildPlugins) {
+            this.buildPlugins.clear();
+            this.buildPlugins.get().addAll(buildPlugins);
             return this;
         }
 

@@ -24,6 +24,7 @@ public class MavenConfigTest {
         MavenConfig config = MavenConfig.fromNode(Node.objectNode());
 
         assertThat(config.getDependencies(), empty());
+        assertThat(config.getBuildPlugins(), empty());
         assertThat(config.getRepositories(), empty());
     }
 
@@ -31,10 +32,12 @@ public class MavenConfigTest {
     public void loadsFromNodeAndOverridesMavenCentral() {
         MavenConfig config = MavenConfig.fromNode(Node.objectNodeBuilder()
                 .withMember("dependencies", Node.fromStrings("g:a:v"))
+                .withMember("build-plugins", Node.fromStrings("g:a:v"))
                 .withMember("repositories", Node.fromNodes(Node.objectNode().withMember("url", "https://example.com")))
                 .build());
 
         assertThat(config.getDependencies(), contains("g:a:v"));
+        assertThat(config.getBuildPlugins(), contains("g:a:v"));
         assertThat(config.getRepositories(), hasSize(1));
         assertThat(config.getRepositories().iterator().next().getUrl(), equalTo("https://example.com"));
     }
@@ -43,6 +46,7 @@ public class MavenConfigTest {
     public void convertToBuilder() {
         MavenConfig config1 = MavenConfig.fromNode(Node.objectNodeBuilder()
                 .withMember("dependencies", Node.fromStrings("g:a:v"))
+                .withMember("build-plugins", Node.fromStrings("g:a:v"))
                 .withMember("repositories", Node.fromNodes(Node.objectNode().withMember("url", "https://example.com")))
                 .build());
         MavenConfig config2 = config1.toBuilder().build();
@@ -55,10 +59,12 @@ public class MavenConfigTest {
     public void mergesConfigs() {
         MavenConfig config1 = MavenConfig.fromNode(Node.objectNodeBuilder()
                 .withMember("dependencies", Node.fromStrings("g:a:v"))
+                .withMember("build-plugins", Node.fromStrings("g:a:v"))
                 .withMember("repositories", Node.fromNodes(Node.objectNode().withMember("url", "https://example.com")))
                 .build());
         MavenConfig config2 = MavenConfig.fromNode(Node.objectNodeBuilder()
                 .withMember("dependencies", Node.fromStrings("g:a:v", "a:a:a"))
+                .withMember("build-plugins", Node.fromStrings("g:a:v", "a:a:a"))
                 .withMember("repositories", Node.fromNodes(
                         Node.objectNode().withMember("url", "https://example.com"),
                         Node.objectNode().withMember("url", "https://m2.example.com")))
@@ -72,9 +78,14 @@ public class MavenConfigTest {
         dependencies.add("g:a:v");
         dependencies.add("a:a:a");
 
+        List<String> buildPlugins = new ArrayList<>();
+        buildPlugins.add("g:a:v");
+        buildPlugins.add("a:a:a");
+
         MavenConfig expectedMerge = MavenConfig.builder()
             .repositories(repos)
             .dependencies(dependencies)
+            .buildPlugins(buildPlugins)
             .build();
 
         assertThat(merged, equalTo(expectedMerge));
