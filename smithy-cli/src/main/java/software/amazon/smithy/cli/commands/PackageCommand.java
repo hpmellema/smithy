@@ -150,6 +150,7 @@ final class PackageCommand implements Command {
         // Write pom file
         PomFile pom = new PomFile(config.getArtifactId().get(), config.getGroupId().get(), config.getVersion().get());
         pom.addDependencies(runtimeDeps);
+        config.getPomData().ifPresent(pom::addAdditionalNodes);
         pom.write(pluginPackagingManifest);
 
         // TODO: add trait codegen?

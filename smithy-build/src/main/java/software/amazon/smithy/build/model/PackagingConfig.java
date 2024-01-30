@@ -31,8 +31,8 @@ import software.amazon.smithy.utils.ToSmithyBuilder;
 
 public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
     private static final List<String> PROPERTIES = ListUtils.of("artifactId", "groupId", "version",
-            "tags", "manifest-headers", "pom-data");
-    private static final String MANIFEST_HEADERS = "manifest-headers";
+            "tags", "manifestHeaders", "pomData");
+    private static final String MANIFEST_HEADERS = "manifestHeaders";
     private final String artifactId;
     private final String groupId;
     private final String version;
@@ -57,7 +57,7 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
                 .getStringMember("groupId", builder::groupId)
                 .getStringMember("version", builder::version)
                 .getArrayMember("tags", StringNode::getValue, builder::tags)
-                .getObjectMember("pom-data", builder::pomData);
+                .getObjectMember("pomData", builder::pomData);
 
         if (objectNode.containsMember(MANIFEST_HEADERS)) {
             for (Map.Entry<String, Node> entry : objectNode.expectObjectMember(MANIFEST_HEADERS)

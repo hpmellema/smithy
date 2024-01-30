@@ -1,12 +1,12 @@
 package software.amazon.smithy.cli.commands;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.Map;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
@@ -22,6 +22,9 @@ import org.w3c.dom.Element;
 import software.amazon.smithy.build.FileManifest;
 import software.amazon.smithy.build.SmithyBuildException;
 import software.amazon.smithy.cli.dependencies.ResolvedArtifact;
+import software.amazon.smithy.model.node.Node;
+import software.amazon.smithy.model.node.ObjectNode;
+import software.amazon.smithy.model.node.StringNode;
 
 final class PomFile {
     private final Document doc;
@@ -104,6 +107,26 @@ final class PomFile {
 
             dependency.appendChild(scope);
             deps.appendChild(dependency);
+        }
+    }
+
+    // TODO: this needs some testing
+    public void addAdditionalNodes(ObjectNode objectNode) {
+        addAdditionalNodes(project, objectNode);
+    }
+
+    private void addAdditionalNodes(Element root, ObjectNode objectNode) {
+        for (Map.Entry<StringNode, Node> memberEntry : objectNode.getMembers().entrySet()) {
+            Element memberNode = doc.createElement(memberEntry.getKey().getValue());
+            root.appendChild(memberNode);
+            Node target = memberEntry.getValue();
+            // If the member target is a string then we are at a leaf node. Otherwise,
+            // we need to keep adding nested nodes.
+            if (target.isStringNode()) {
+                memberNode.appendChild(doc.createTextNode(target.expectStringNode().getValue()));
+            } else {
+                addAdditionalNodes(memberNode, target.expectObjectNode());
+            }
         }
     }
 
