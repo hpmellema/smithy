@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import software.amazon.smithy.build.SmithyBuildException;
 import software.amazon.smithy.model.node.Node;
 import software.amazon.smithy.model.node.ObjectNode;
@@ -34,7 +35,6 @@ public final class ProjectionConfig implements ToSmithyBuilder<ProjectionConfig>
     private final List<String> imports;
     private final List<TransformConfig> transforms;
     private final Map<String, ObjectNode> plugins;
-
     private final PackagingConfig packaging;
 
     private ProjectionConfig(Builder builder) {
@@ -79,7 +79,7 @@ public final class ProjectionConfig implements ToSmithyBuilder<ProjectionConfig>
                         builder.plugins.get().put(entry.getKey(), entry.getValue().expectObjectNode());
                     }
                 })
-                .getObjectMember("packaging", PackagingConfig::fromNode);
+                .getObjectMember("packaging", p -> builder.packaging(PackagingConfig.fromNode(p)));
         return builder.build();
     }
 
@@ -111,6 +111,11 @@ public final class ProjectionConfig implements ToSmithyBuilder<ProjectionConfig>
      */
     public List<String> getImports() {
         return imports;
+    }
+
+    // TODO: docs
+    public Optional<PackagingConfig> getPackaging() {
+        return Optional.ofNullable(packaging);
     }
 
     /**

@@ -1,0 +1,17 @@
+{
+    "version": "1.0",
+    "imports": ["foo.json"],
+    "projections": {
+        "a": {
+            "imports": ["baz.json"],
+            "packaging": {
+                "artifactId": "projection-artifact"
+            }
+        }
+    },
+    "packaging": {
+        "artifactId": "source-artifact",
+        "groupId": "com.example.smithy",
+        "version": "1.1.1"
+    }
+}

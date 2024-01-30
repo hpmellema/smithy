@@ -65,9 +65,9 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
         PackagingConfig.Builder builder = builder();
         ObjectNode objectNode = node.expectObjectNode();
         objectNode.warnIfAdditionalProperties(PROPERTIES)
-                .expectStringMember("artifactId", builder::artifactId)
-                .expectStringMember("groupId", builder::groupId)
-                .expectStringMember("version", builder::version)
+                .getStringMember("artifactId", builder::artifactId)
+                .getStringMember("groupId", builder::groupId)
+                .getStringMember("version", builder::version)
                 .getArrayMember("include", StringNode::getValue, builder::include)
                 .getArrayMember("tags", StringNode::getValue, builder::tags)
                 .getObjectMember("pom-data", builder::pomData);
@@ -89,6 +89,25 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
         return builder.build();
     }
 
+    public PackagingConfig merge(PackagingConfig other) {
+        Builder builder = toBuilder();
+
+        other.getArtifactId().ifPresent(builder::artifactId);
+        other.getGroupId().ifPresent(builder::groupId);
+        other.getVersion().ifPresent(builder::version);
+        builder.tags.get().addAll(other.getTags());
+        builder.include.get().addAll(other.include);
+        builder.manifestHeaders.get().putAll(other.getManifestHeaders());
+
+        if (other.getPomData().isPresent()) {
+            builder.pomData = builder.pomData.toBuilder()
+                    .merge(other.getPomData().get())
+                    .build();
+        }
+
+        return builder.build();
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -105,16 +124,16 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
                 .manifestHeaders(manifestHeaders);
     }
 
-    public String getArtifactId() {
-        return artifactId;
+    public Optional<String> getArtifactId() {
+        return Optional.ofNullable(artifactId);
     }
 
-    public String getGroupId() {
-        return groupId;
+    public Optional<String> getGroupId() {
+        return Optional.ofNullable(groupId);
     }
 
-    public String getVersion() {
-        return version;
+    public Optional<String> getVersion() {
+        return Optional.ofNullable(version);
     }
 
     public Set<String> getInclude() {
@@ -139,8 +158,12 @@ public final class PackagingConfig implements ToSmithyBuilder<PackagingConfig> {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
         PackagingConfig that = (PackagingConfig) o;
         return Objects.equals(artifactId, that.artifactId)
                 && Objects.equals(groupId, that.groupId)

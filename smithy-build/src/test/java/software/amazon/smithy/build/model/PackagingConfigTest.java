@@ -2,13 +2,14 @@ package software.amazon.smithy.build.model;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.anEmptyMap;
+import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.emptyIterable;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasEntry;
 import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.nullValue;
 
 import org.junit.jupiter.api.Test;
+import software.amazon.smithy.model.node.ArrayNode;
 import software.amazon.smithy.model.node.Node;
 import software.amazon.smithy.model.node.ObjectNode;
 
@@ -17,9 +18,9 @@ public class PackagingConfigTest {
     public void hasCorrectDefaultsBuiltInToThePojo() {
         PackagingConfig config = PackagingConfig.builder().build();
 
-        assertThat(config.getArtifactId(), nullValue());
-        assertThat(config.getVersion(), nullValue());
-        assertThat(config.getGroupId(), nullValue());
+        assertThat(config.getArtifactId().isPresent(), is(false));
+        assertThat(config.getVersion().isPresent(), is(false));
+        assertThat(config.getGroupId().isPresent(), is(false));
         assertThat(config.getTags(), emptyIterable());
         assertThat(config.getInclude(), emptyIterable());
         assertThat(config.getPomData().isPresent(), is(false));
@@ -35,9 +36,9 @@ public class PackagingConfigTest {
                 .withMember("version", "1.0.1")
         );
 
-        assertThat(config.getArtifactId(), is("my-artifact"));
-        assertThat(config.getGroupId(), is("com.example.smithy"));
-        assertThat(config.getVersion(), is("1.0.1"));
+        assertThat(config.getArtifactId().get(), is("my-artifact"));
+        assertThat(config.getGroupId().get(), is("com.example.smithy"));
+        assertThat(config.getVersion().get(), is("1.0.1"));
         assertThat(config.getTags(), emptyIterable());
         assertThat(config.getInclude(), emptyIterable());
         assertThat(config.getPomData().isPresent(), is(false));
@@ -56,9 +57,9 @@ public class PackagingConfigTest {
                         .build())
         );
 
-        assertThat(config.getArtifactId(), is("my-artifact"));
-        assertThat(config.getGroupId(), is("com.example.smithy"));
-        assertThat(config.getVersion(), is("1.0.1"));
+        assertThat(config.getArtifactId().get(), is("my-artifact"));
+        assertThat(config.getGroupId().get(), is("com.example.smithy"));
+        assertThat(config.getVersion().get(), is("1.0.1"));
         assertThat(config.getTags(), emptyIterable());
         assertThat(config.getInclude(), emptyIterable());
         assertThat(config.getPomData().isPresent(), is(false));
@@ -77,5 +78,24 @@ public class PackagingConfigTest {
 
         assertThat(config1, equalTo(config1));
         assertThat(config1, equalTo(config2));
+    }
+
+    @Test
+    public void mergesConfigs() {
+        PackagingConfig config1 = PackagingConfig.fromNode(Node.objectNode()
+                .withMember("artifactId", "my-artifact")
+                .withMember("groupId", "com.example.smithy")
+                .withMember("tags", ArrayNode.fromStrings("a", "b"))
+        );
+        PackagingConfig config2 = PackagingConfig.fromNode(Node.objectNode()
+                .withMember("artifactId", "my-other-artifact")
+                .withMember("version", "1.0.1")
+                .withMember("tags", ArrayNode.fromStrings("c", "d"))
+        );
+        PackagingConfig merged = config2.merge(config1);
+        assertThat(merged.getArtifactId().get(), is("my-artifact"));
+        assertThat(merged.getGroupId().get(), is("com.example.smithy"));
+        assertThat(merged.getVersion().get(), is("1.0.1"));
+        assertThat(merged.getTags(), contains("c", "d", "a", "b"));
     }
 }

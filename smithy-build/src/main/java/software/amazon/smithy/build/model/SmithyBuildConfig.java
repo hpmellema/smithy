@@ -277,6 +277,19 @@ public final class SmithyBuildConfig implements ToSmithyBuilder<SmithyBuildConfi
                 plugins.get().put(builtin, Node.objectNode());
             }
 
+            // TODO: clean up merging
+            // Merge all the packaging configs to ensure projections inherit packaging configuration
+            if (packaging != null) {
+                for (Map.Entry<String, ProjectionConfig> entry : projections.get().entrySet()) {
+                    // Replace with merged config
+                    ProjectionConfig config = entry.getValue();
+                    entry.getValue().getPackaging().ifPresent(p -> {
+                        projections.get().put(entry.getKey(),
+                                config.toBuilder().packaging(packaging.merge(p)).build());
+                    });
+                }
+            }
+
             return new SmithyBuildConfig(this);
         }
 
@@ -330,7 +343,7 @@ public final class SmithyBuildConfig implements ToSmithyBuilder<SmithyBuildConfi
                             plugins.get().put(entry.getKey(), entry.getValue().expectObjectNode());
                         }
                     })
-                    .getObjectMember("packaging", p -> packaging = PackagingConfig.fromNode(p))
+                    .getObjectMember("packaging", p -> this.packaging(PackagingConfig.fromNode(p)))
                     .getBooleanMember("ignoreMissingPlugins", this::ignoreMissingPlugins)
                     .getMember("maven", MavenConfig::fromNode, this::maven);
             return this;

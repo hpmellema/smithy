@@ -16,20 +16,25 @@
 package software.amazon.smithy.build.model;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.anEmptyMap;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.empty;
+import static org.hamcrest.Matchers.emptyIterable;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasEntry;
 import static org.hamcrest.Matchers.hasKey;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -252,5 +257,28 @@ public class SmithyBuildConfigTest {
 
         assertThat(a.toBuilder().merge(b).build().getMaven().get().getDependencies(),
                    contains("c:d:1.0.0", "a:b:1.0.0"));
+    }
+
+    @Test
+    public void mergesTopLevelPackagingWithProjectionPackaging() throws IOException {
+        ObjectNode value = Node.parse(getClass().getResource("loads-packaging.json").openStream())
+                .expectObjectNode();
+        SmithyBuildConfig config = SmithyBuildConfig.fromNode(value);
+
+        assertThat(config.getPackaging().isPresent(), is(true));
+        PackagingConfig packagingConfig = config.getPackaging().get();
+
+        assertThat(packagingConfig.getArtifactId().get(), equalTo("source-artifact"));
+        assertThat(packagingConfig.getGroupId().get(), equalTo("com.example.smithy"));
+        assertThat(packagingConfig.getVersion().get(), equalTo("1.1.1"));
+
+        // Check that projection packaging correctly overrides base packaging config artifact id
+        ProjectionConfig projectionConfig = config.getProjections().get("a");
+        assertThat(projectionConfig, not(nullValue()));
+        assertThat(projectionConfig.getPackaging().isPresent(), is(true));
+        PackagingConfig nestedPackagingConfig = projectionConfig.getPackaging().get();
+        assertThat(nestedPackagingConfig.getArtifactId().get(), equalTo("projection-artifact"));
+        assertThat(nestedPackagingConfig.getGroupId().get(), equalTo("com.example.smithy"));
+        assertThat(nestedPackagingConfig.getVersion().get(), equalTo("1.1.1"));
     }
 }
