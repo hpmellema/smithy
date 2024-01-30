@@ -15,27 +15,21 @@
 
 package software.amazon.smithy.cli.commands;
 
-import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 import software.amazon.smithy.build.model.MavenConfig;
-import software.amazon.smithy.build.model.MavenRepository;
 import software.amazon.smithy.build.model.SmithyBuildConfig;
 import software.amazon.smithy.cli.Arguments;
 import software.amazon.smithy.cli.CliError;
 import software.amazon.smithy.cli.Command;
 import software.amazon.smithy.cli.EnvironmentVariable;
-import software.amazon.smithy.cli.SmithyCli;
 import software.amazon.smithy.cli.dependencies.DependencyResolver;
 import software.amazon.smithy.cli.dependencies.DependencyResolverException;
-import software.amazon.smithy.cli.dependencies.FileCacheResolver;
-import software.amazon.smithy.cli.dependencies.FilterCliVersionResolver;
 import software.amazon.smithy.cli.dependencies.ResolvedArtifact;
 
 /**
@@ -126,47 +120,15 @@ class ClasspathAction implements CommandAction {
             Command.Env env,
             MavenConfig maven
     ) {
-        // TODO: Extract out common dep resolution infra
         DependencyResolver baseResolver = dependencyResolverFactory.create(smithyBuildConfig, env);
-        long lastModified = smithyBuildConfig.getLastModifiedInMillis();
-        DependencyResolver delegate = new FilterCliVersionResolver(SmithyCli.getVersion(), baseResolver);
-        DependencyResolver resolver = new FileCacheResolver(getCacheFile(buildOptions, smithyBuildConfig),
-                lastModified,
-                delegate);
+        List<ResolvedArtifact> artifacts = ConfigurationUtils.resolveArtifactsWithFileCache(smithyBuildConfig,
+                buildOptions, maven, baseResolver);
 
-        Set<MavenRepository> repositories = ConfigurationUtils.getConfiguredMavenRepos(smithyBuildConfig);
-        repositories.forEach(resolver::addRepository);
-
-        // Use the pinned lockfile dependencies if a lockfile exists otherwise use the configured dependencies
-        Optional<LockFile> lockFileOptional = LockFile.load();
-        if (lockFileOptional.isPresent()) {
-            LockFile lockFile = lockFileOptional.get();
-            if (lockFile.getConfigHash() != ConfigurationUtils.configHash(maven.getAllDependencies(), repositories)) {
-                throw new CliError(
-                        "`smithy-lock.json` does not match configured dependencies. "
-                                + "Re-lock dependencies using the `lock` command or revert changes.");
-            }
-            LOGGER.fine(() -> "`smithy-lock.json` found. Using locked dependencies: "
-                    + lockFile.getDependencyCoordinateSet());
-            lockFile.getDependencyCoordinateSet().forEach(resolver::addDependency);
-        } else {
-            maven.getAllDependencies().forEach(resolver::addDependency);
-        }
-
-        List<ResolvedArtifact> artifacts = resolver.resolve();
-        LOGGER.fine(() -> "Classpath resolved with Maven: " + artifacts);
-
-        // Ensure resolved artifacts match pinned artifacts
-        lockFileOptional.ifPresent(lockFile -> lockFile.validateArtifacts(artifacts));
         List<Path> result = new ArrayList<>(artifacts.size());
         for (ResolvedArtifact artifact : artifacts) {
             result.add(artifact.getPath());
         }
 
         return result;
-    }
-
-    private File getCacheFile(BuildOptions buildOptions, SmithyBuildConfig config) {
-        return buildOptions.resolveOutput(config).resolve("classpath.json").toFile();
     }
 }

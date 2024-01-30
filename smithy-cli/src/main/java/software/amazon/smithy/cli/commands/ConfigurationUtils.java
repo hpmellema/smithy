@@ -5,14 +5,23 @@
 
 package software.amazon.smithy.cli.commands;
 
+import java.io.File;
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.logging.Logger;
 import software.amazon.smithy.build.model.MavenConfig;
 import software.amazon.smithy.build.model.MavenRepository;
 import software.amazon.smithy.build.model.SmithyBuildConfig;
+import software.amazon.smithy.cli.CliError;
 import software.amazon.smithy.cli.EnvironmentVariable;
+import software.amazon.smithy.cli.SmithyCli;
+import software.amazon.smithy.cli.dependencies.DependencyResolver;
+import software.amazon.smithy.cli.dependencies.FileCacheResolver;
+import software.amazon.smithy.cli.dependencies.FilterCliVersionResolver;
+import software.amazon.smithy.cli.dependencies.ResolvedArtifact;
 
 final class ConfigurationUtils {
     private static final int FNV_OFFSET_BIAS = 0x811c9dc5;
@@ -58,6 +67,56 @@ final class ConfigurationUtils {
             repositories.add(CENTRAL);
         }
         return repositories;
+    }
+
+    /**
+     * Resolves all dependency artifacts using a file cache resolver
+     * <p>
+     * Note: this will resolve both build-plugin dependencies and normal dependencies.
+     *
+     * @return list of resolved artifacts.
+     */
+    public static List<ResolvedArtifact> resolveArtifactsWithFileCache(SmithyBuildConfig smithyBuildConfig,
+                                                                BuildOptions buildOptions,
+                                                                MavenConfig maven,
+                                                                DependencyResolver baseResolver
+
+    ) {
+        long lastModified = smithyBuildConfig.getLastModifiedInMillis();
+        DependencyResolver delegate = new FilterCliVersionResolver(SmithyCli.getVersion(), baseResolver);
+        DependencyResolver resolver = new FileCacheResolver(getCacheFile(buildOptions, smithyBuildConfig),
+                lastModified,
+                delegate);
+
+        Set<MavenRepository> repositories = ConfigurationUtils.getConfiguredMavenRepos(smithyBuildConfig);
+        repositories.forEach(resolver::addRepository);
+
+        // Use the pinned lockfile dependencies if a lockfile exists otherwise use the configured dependencies
+        Optional<LockFile> lockFileOptional = LockFile.load();
+        if (lockFileOptional.isPresent()) {
+            LockFile lockFile = lockFileOptional.get();
+            if (lockFile.getConfigHash() != ConfigurationUtils.configHash(maven.getAllDependencies(), repositories)) {
+                throw new CliError(
+                        "`smithy-lock.json` does not match configured dependencies. "
+                                + "Re-lock dependencies using the `lock` command or revert changes.");
+            }
+            LOGGER.fine(() -> "`smithy-lock.json` found. Using locked dependencies: "
+                    + lockFile.getDependencyCoordinateSet());
+            lockFile.getDependencyCoordinateSet().forEach(resolver::addDependency);
+        } else {
+            maven.getAllDependencies().forEach(resolver::addDependency);
+        }
+
+        List<ResolvedArtifact> artifacts = resolver.resolve();
+        LOGGER.fine(() -> "Classpath resolved with Maven: " + artifacts);
+        // Ensure resolved artifacts match pinned artifacts
+        lockFileOptional.ifPresent(lockFile -> lockFile.validateArtifacts(artifacts));
+
+        return artifacts;
+    }
+
+    private static File getCacheFile(BuildOptions buildOptions, SmithyBuildConfig config) {
+        return buildOptions.resolveOutput(config).resolve("classpath.json").toFile();
     }
 
     /**
