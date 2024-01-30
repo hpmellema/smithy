@@ -433,6 +433,11 @@ public final class SmithyBuild {
         return this;
     }
 
+    // TODO: Is there a better way to get a prepared config?
+    public SmithyBuildConfig getPreparedConfig() {
+        return new SmithyBuildImpl(this).getConfig();
+    }
+
     // Lazy initialization holder class idiom.
     private static final class DefaultPathHolder {
         private static final Path DEFAULT_PATH = resolveDefaultPath();

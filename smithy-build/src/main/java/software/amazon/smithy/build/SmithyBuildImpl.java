@@ -497,4 +497,9 @@ final class SmithyBuildImpl {
 
         return currentModel;
     }
+
+    // TODO: Is there a better approach?
+    public SmithyBuildConfig getConfig() {
+        return config;
+    }
 }

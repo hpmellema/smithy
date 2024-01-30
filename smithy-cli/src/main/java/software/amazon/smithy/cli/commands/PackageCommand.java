@@ -15,12 +15,17 @@
 
 package software.amazon.smithy.cli.commands;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
+import software.amazon.smithy.build.FileManifest;
+import software.amazon.smithy.build.SmithyBuild;
 import software.amazon.smithy.build.model.MavenConfig;
+import software.amazon.smithy.build.model.PackagingConfig;
 import software.amazon.smithy.build.model.ProjectionConfig;
 import software.amazon.smithy.build.model.SmithyBuildConfig;
 import software.amazon.smithy.cli.ArgumentReceiver;
@@ -37,6 +42,8 @@ final class PackageCommand implements Command {
     private final DependencyResolver.Factory dependencyResolverFactory;
     private final String parentCommandName;
 
+    // TODO: Make this per-packager?
+    private static final String PACKAGING_OUTPUT = "release/jar";
 
     PackageCommand(String parentCommandName, DependencyResolver.Factory dependencyResolverFactory) {
         this.parentCommandName = parentCommandName;
@@ -90,27 +97,76 @@ final class PackageCommand implements Command {
 
         // Resolve dependencies to use for packaging
         List<ResolvedArtifact> runtimeDeps = resolveRuntimeDependencies(smithyBuildConfig, buildOptions, env);
+        LOGGER.warning("FOUND RUNTIME DEPS: " + runtimeDeps);
+
+        // Prepare the config so it contains the build info
+        // TODO: Improve the approach to get a prepared config
+        smithyBuildConfig = SmithyBuild.create(env.classLoader()).config(smithyBuildConfig).getPreparedConfig();
+
+        LOGGER.warning("PROJECTIONS " + smithyBuildConfig.getProjections());
 
         // List through each of the projections
+        // TODO: Maybe just go through the directories?
+        Path outputDirectory = buildOptions.resolveOutput(smithyBuildConfig);
         if (options.projection != null) {
-            ProjectionConfig projectionName = smithyBuildConfig.getProjections().get(options.projection);
-            if (projectionName == null) {
+            ProjectionConfig projectionConfig = smithyBuildConfig.getProjections().get(options.projection);
+            if (projectionConfig == null) {
                 throw new CliError("Could not find projection `" + options
                         + "` in build config.");
             }
-            packageProjection();
-
+            projectionConfig.getPackaging().ifPresent(p -> {
+                packageProjection(options.projection, p, outputDirectory, runtimeDeps);
+            });
         } else {
-            for (Map.Entry<String, ProjectionConfig> projection : smithyBuildConfig.getProjections().entrySet()) {
-
+            for (Map.Entry<String, ProjectionConfig> projectionEntry : smithyBuildConfig.getProjections().entrySet()) {
+                LOGGER.warning("PACKAGING PROJECTION " + projectionEntry.getKey());
+                LOGGER.warning("PACKAGING WITH PACKAGING? " + projectionEntry.getValue().getPackaging().isPresent());
+                projectionEntry.getValue().getPackaging().ifPresent(p -> {
+                    packageProjection(projectionEntry.getKey(), p, outputDirectory, runtimeDeps);
+                });
             }
         }
 
         return 0;
     }
 
-    private void packageProjection() {
+    private void packageProjection(String name,
+                                   PackagingConfig config,
+                                   Path outputDirectory,
+                                   List<ResolvedArtifact> runtimeDeps
+    ) {
+        Path sourcesPath = outputDirectory.resolve(name).resolve("sources");
+        if (!Files.exists(sourcesPath)) {
+            throw new CliError("Could not find generated artifacts for projection `" + name
+                    + "`. Run `smithy build` before attempting to package build artifacts.");
+        }
+        // Check that config contains expected elements
+        validateConfig(config, name);
 
+        // Get a file manifest scoped to the ${outputDir}/${projection}/release/jar/
+        FileManifest pluginPackagingManifest = FileManifest.create(
+                outputDirectory.resolve(name).resolve(PACKAGING_OUTPUT));
+
+        // Write pom file
+        PomFile pom = new PomFile(config.getArtifactId().get(), config.getGroupId().get(), config.getVersion().get());
+        pom.addDependencies(runtimeDeps);
+        pom.write(pluginPackagingManifest);
+
+        // TODO: add trait codegen?
+        // Write Jar file with just sources
+
+
+        LOGGER.warning("PACKAGING PROJECTION: " + name);
+    }
+
+
+    private void validateConfig(PackagingConfig config, String projectionName) {
+        config.getVersion().orElseThrow(
+                () -> new CliError("`version` not configured for projection `" + projectionName + "`."));
+        config.getGroupId().orElseThrow(
+                () -> new CliError("`groupId` not configured for projection `" + projectionName + "`."));
+        config.getArtifactId().orElseThrow(
+                () -> new CliError("`artifactId` not configured for projection `" + projectionName + "`."));
     }
 
     private List<ResolvedArtifact> resolveRuntimeDependencies(SmithyBuildConfig smithyBuildConfig,
@@ -133,8 +189,6 @@ final class PackageCommand implements Command {
         List<ResolvedArtifact> runtimeDeps = allDeps.stream()
                 .filter(d -> versionTrimmedDeps.contains(trimVersion(d.getCoordinates())))
                 .collect(Collectors.toList());
-
-        LOGGER.warning("FOUND RUNTIME DEPS: " + runtimeDeps);
 
         return runtimeDeps;
     }

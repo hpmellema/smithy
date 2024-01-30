@@ -1,13 +1,16 @@
 package software.amazon.smithy.cli.commands;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.OutputKeys;
 import javax.xml.transform.Transformer;
 import javax.xml.transform.TransformerException;
 import javax.xml.transform.TransformerFactory;
@@ -16,18 +19,25 @@ import javax.xml.transform.stream.StreamResult;
 import org.w3c.dom.Attr;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
+import software.amazon.smithy.build.FileManifest;
 import software.amazon.smithy.build.SmithyBuildException;
 import software.amazon.smithy.cli.dependencies.ResolvedArtifact;
 
 final class PomFile {
     private final Document doc;
     private final Element project;
+    private final String artifactId;
+    private final String version;
 
     public PomFile(String artifactId, String groupId, String version) {
+        this.artifactId = artifactId;
+        this.version = version;
         doc = createBaseDocument();
 
         // Add root project element
         project = doc.createElement("project");
+        doc.appendChild(project);
+
         Attr xmlns = doc.createAttribute("xmlns");
         xmlns.setValue("http://maven.apache.org/POM/4.0.0");
         project.setAttributeNode(xmlns);
@@ -97,12 +107,19 @@ final class PomFile {
         }
     }
 
-    public void write(Path pomPath) {
+    // TODO: docs
+    public void write(FileManifest manifest) {
+        // Poms are usually named ${artifactId}-${version}.pom by both Gradle and
+        // maven. We follow the same convention here.
+        Path outputFilePath = manifest.addFile(Paths.get(artifactId + "-" + version + ".pom"));
         try {
             TransformerFactory transformerFactory = TransformerFactory.newInstance();
             Transformer transformer = transformerFactory.newTransformer();
+            transformer.setOutputProperty(OutputKeys.ENCODING, "UTF-8");
+            // Improves readability of generated POM
+            transformer.setOutputProperty(OutputKeys.INDENT, "yes");
             DOMSource source = new DOMSource(doc);
-            StreamResult result = new StreamResult(Files.newOutputStream(pomPath));
+            StreamResult result = new StreamResult(Files.newOutputStream(outputFilePath));
             transformer.transform(source, result);
         } catch (TransformerException e) {
             throw new RuntimeException(e);
