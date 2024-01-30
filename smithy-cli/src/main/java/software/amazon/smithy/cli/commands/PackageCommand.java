@@ -16,13 +16,16 @@
 package software.amazon.smithy.cli.commands;
 
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import software.amazon.smithy.build.model.MavenConfig;
+import software.amazon.smithy.build.model.ProjectionConfig;
 import software.amazon.smithy.build.model.SmithyBuildConfig;
 import software.amazon.smithy.cli.ArgumentReceiver;
 import software.amazon.smithy.cli.Arguments;
+import software.amazon.smithy.cli.CliError;
 import software.amazon.smithy.cli.Command;
 import software.amazon.smithy.cli.HelpPrinter;
 import software.amazon.smithy.cli.dependencies.DependencyResolver;
@@ -84,10 +87,30 @@ final class PackageCommand implements Command {
         BuildOptions buildOptions = arguments.getReceiver(BuildOptions.class);
         SmithyBuildConfig smithyBuildConfig = configOptions.createSmithyBuildConfig();
         Options options = arguments.getReceiver(Options.class);
+
         // Resolve dependencies to use for packaging
-        resolveRuntimeDependencies(smithyBuildConfig, buildOptions, env);
+        List<ResolvedArtifact> runtimeDeps = resolveRuntimeDependencies(smithyBuildConfig, buildOptions, env);
+
+        // List through each of the projections
+        if (options.projection != null) {
+            ProjectionConfig projectionName = smithyBuildConfig.getProjections().get(options.projection);
+            if (projectionName == null) {
+                throw new CliError("Could not find projection `" + options
+                        + "` in build config.");
+            }
+            packageProjection();
+
+        } else {
+            for (Map.Entry<String, ProjectionConfig> projection : smithyBuildConfig.getProjections().entrySet()) {
+
+            }
+        }
 
         return 0;
+    }
+
+    private void packageProjection() {
+
     }
 
     private List<ResolvedArtifact> resolveRuntimeDependencies(SmithyBuildConfig smithyBuildConfig,
