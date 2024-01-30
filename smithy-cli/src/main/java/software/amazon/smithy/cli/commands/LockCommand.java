@@ -59,7 +59,7 @@ final class LockCommand implements Command {
 
         Set<MavenRepository> repositories = ConfigurationUtils.getConfiguredMavenRepos(smithyBuildConfig);
         Set<String> dependencies = smithyBuildConfig.getMaven()
-                .map(MavenConfig::getDependencies)
+                .map(MavenConfig::getAllDependencies)
                 .orElse(Collections.emptySet());
         dependencies.forEach(resolver::addDependency);
         repositories.forEach(resolver::addRepository);

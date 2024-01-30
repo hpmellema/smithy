@@ -77,7 +77,7 @@ class ClasspathAction implements CommandAction {
             Consumer<ClassLoader> consumer
     ) {
         Set<String> dependencies = smithyBuildConfig.getMaven()
-                .map(MavenConfig::getDependencies)
+                .map(MavenConfig::getAllDependencies)
                 .orElse(Collections.emptySet());
 
         String dependencyMode = EnvironmentVariable.SMITHY_DEPENDENCY_MODE.get();
@@ -126,6 +126,7 @@ class ClasspathAction implements CommandAction {
             Command.Env env,
             MavenConfig maven
     ) {
+        // TODO: Extract out common dep resolution infra
         DependencyResolver baseResolver = dependencyResolverFactory.create(smithyBuildConfig, env);
         long lastModified = smithyBuildConfig.getLastModifiedInMillis();
         DependencyResolver delegate = new FilterCliVersionResolver(SmithyCli.getVersion(), baseResolver);
@@ -140,7 +141,7 @@ class ClasspathAction implements CommandAction {
         Optional<LockFile> lockFileOptional = LockFile.load();
         if (lockFileOptional.isPresent()) {
             LockFile lockFile = lockFileOptional.get();
-            if (lockFile.getConfigHash() != ConfigurationUtils.configHash(maven.getDependencies(), repositories)) {
+            if (lockFile.getConfigHash() != ConfigurationUtils.configHash(maven.getAllDependencies(), repositories)) {
                 throw new CliError(
                         "`smithy-lock.json` does not match configured dependencies. "
                                 + "Re-lock dependencies using the `lock` command or revert changes.");
@@ -149,7 +150,7 @@ class ClasspathAction implements CommandAction {
                     + lockFile.getDependencyCoordinateSet());
             lockFile.getDependencyCoordinateSet().forEach(resolver::addDependency);
         } else {
-            maven.getDependencies().forEach(resolver::addDependency);
+            maven.getAllDependencies().forEach(resolver::addDependency);
         }
 
         List<ResolvedArtifact> artifacts = resolver.resolve();
