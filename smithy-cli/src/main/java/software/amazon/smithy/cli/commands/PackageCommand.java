@@ -35,6 +35,8 @@ import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
+import javax.tools.JavaCompiler;
+import javax.tools.ToolProvider;
 import software.amazon.smithy.build.FileManifest;
 import software.amazon.smithy.build.SmithyBuild;
 import software.amazon.smithy.build.model.MavenConfig;
@@ -143,8 +145,11 @@ final class PackageCommand implements Command {
                 });
             }
         }
-
         return 0;
+    }
+
+    private void compileTraitCodegenCode(Path traitCodegenPath) {
+
     }
 
     private void packageProjection(String name,
@@ -173,17 +178,23 @@ final class PackageCommand implements Command {
         Path jarFilePath = pluginPackagingManifest.addFile(Paths.get(
                 config.getArtifactId().get() + "-" + config.getVersion().get() + ".jar"));
         try (JarOutputStream jos = new JarOutputStream(Files.newOutputStream(jarFilePath), getJarManifest(config))) {
-            for (Path srcsPath : listContents(sourcesPath.toFile())) {
-                LOGGER.warning("FOUND SOURCES PATH " + srcsPath);
-                String jarPath = getJarPath(sourcesPath, SMITHY_SOURCE_PREFIX, srcsPath);
-                LOGGER.warning("TRANSLATED TO JAR PATH " + jarPath);
-                writeJarEntry(jarPath, srcsPath, jos);
+            addSourcesPluginFiles(sourcesPath, jos);
+            Path traitCodegenPluginPath = outputDirectory.resolve(name).resolve(SOURCES);
+            if (Files.exists(traitCodegenPluginPath)) {
+                compileTraitCodegenCode(traitCodegenPluginPath);
             }
         } catch (IOException exc) {
             throw new UncheckedIOException(exc);
         }
 
         LOGGER.warning("PACKAGING PROJECTION: " + name);
+    }
+
+    private void addSourcesPluginFiles(Path sourcesPath, JarOutputStream jos) throws IOException {
+        for (Path srcsPath : listContents(sourcesPath.toFile())) {
+            String jarPath = getJarPath(sourcesPath, SMITHY_SOURCE_PREFIX, srcsPath);
+            writeJarEntry(jarPath, srcsPath, jos);
+        }
     }
 
     private static void writeJarEntry(String fileName, Path path, JarOutputStream target) throws IOException {
