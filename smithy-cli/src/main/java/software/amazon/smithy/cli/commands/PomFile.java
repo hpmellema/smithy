@@ -1,3 +1,8 @@
+/*
+ * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package software.amazon.smithy.cli.commands;
 
 import java.io.IOException;
@@ -32,7 +37,7 @@ final class PomFile {
     private final String artifactId;
     private final String version;
 
-    public PomFile(String artifactId, String groupId, String version) {
+    PomFile(String artifactId, String groupId, String version) {
         this.artifactId = artifactId;
         this.version = version;
         doc = createBaseDocument();

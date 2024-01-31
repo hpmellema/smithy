@@ -269,6 +269,7 @@ public final class IoUtils {
         ProcessBuilder processBuilder = new ProcessBuilder(args)
                 .directory(Objects.requireNonNull(directory.toFile(), "Process directory cannot be null"))
                 .redirectErrorStream(true);
+        LOGGER.warning("DIRECTORY " + directory.toFile().toPath());
         processBuilder.environment().putAll(env);
 
         try {

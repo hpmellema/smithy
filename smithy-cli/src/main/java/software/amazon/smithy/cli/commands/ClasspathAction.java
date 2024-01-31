@@ -28,8 +28,11 @@ import software.amazon.smithy.cli.Arguments;
 import software.amazon.smithy.cli.CliError;
 import software.amazon.smithy.cli.Command;
 import software.amazon.smithy.cli.EnvironmentVariable;
+import software.amazon.smithy.cli.SmithyCli;
 import software.amazon.smithy.cli.dependencies.DependencyResolver;
 import software.amazon.smithy.cli.dependencies.DependencyResolverException;
+import software.amazon.smithy.cli.dependencies.FileCacheResolver;
+import software.amazon.smithy.cli.dependencies.FilterCliVersionResolver;
 import software.amazon.smithy.cli.dependencies.ResolvedArtifact;
 
 /**
@@ -121,8 +124,13 @@ class ClasspathAction implements CommandAction {
             MavenConfig maven
     ) {
         DependencyResolver baseResolver = dependencyResolverFactory.create(smithyBuildConfig, env);
-        List<ResolvedArtifact> artifacts = ConfigurationUtils.resolveArtifactsWithFileCache(smithyBuildConfig,
-                buildOptions, maven, baseResolver);
+        long lastModified = smithyBuildConfig.getLastModifiedInMillis();
+        DependencyResolver delegate = new FilterCliVersionResolver(SmithyCli.getVersion(), baseResolver);
+        DependencyResolver resolver = new FileCacheResolver(
+                ConfigurationUtils.getCacheFile(buildOptions, smithyBuildConfig),
+                lastModified,
+                delegate);
+        List<ResolvedArtifact> artifacts = ConfigurationUtils.resolveArtifacts(smithyBuildConfig, maven, resolver);
 
         List<Path> result = new ArrayList<>(artifacts.size());
         for (ResolvedArtifact artifact : artifacts) {

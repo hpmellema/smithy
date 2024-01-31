@@ -1,16 +1,6 @@
 /*
  * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- *  http://aws.amazon.com/apache2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package software.amazon.smithy.cli.commands;
@@ -19,11 +9,17 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -46,23 +42,29 @@ import software.amazon.smithy.build.model.SmithyBuildConfig;
 import software.amazon.smithy.cli.ArgumentReceiver;
 import software.amazon.smithy.cli.Arguments;
 import software.amazon.smithy.cli.CliError;
+import software.amazon.smithy.cli.ColorFormatter;
 import software.amazon.smithy.cli.Command;
 import software.amazon.smithy.cli.HelpPrinter;
 import software.amazon.smithy.cli.SmithyCli;
 import software.amazon.smithy.cli.dependencies.DependencyResolver;
+import software.amazon.smithy.cli.dependencies.FileCacheResolver;
+import software.amazon.smithy.cli.dependencies.FilterCliVersionResolver;
 import software.amazon.smithy.cli.dependencies.ResolvedArtifact;
+import software.amazon.smithy.utils.IoUtils;
+import software.amazon.smithy.utils.ListUtils;
 
 final class PackageCommand implements Command {
     private static final Logger LOGGER = Logger.getLogger(PackageCommand.class.getName());
     private static final String SOURCES = "sources";
-    private static final String SMITHY_SOURCE_PREFIX= "META-INF/smithy/";
+    private static final String SMITHY_SOURCE_PREFIX = "META-INF/smithy/";
+    private static final String TRAIT_CODEGEN = "trait-codegen";
     private static final int BUFFER_SIZE = 1024;
     private static final String BUILD_TIMESTAMP_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSSZ";
+    private static final String PACKAGING_OUTPUT = "release/jar";
+
     private final DependencyResolver.Factory dependencyResolverFactory;
     private final String parentCommandName;
-
     // TODO: Make this per-packager?
-    private static final String PACKAGING_OUTPUT = "release/jar";
 
     PackageCommand(String parentCommandName, DependencyResolver.Factory dependencyResolverFactory) {
         this.parentCommandName = parentCommandName;
@@ -90,6 +92,58 @@ final class PackageCommand implements Command {
         return action.apply(arguments, env);
     }
 
+    private int run(Arguments arguments, Env env) {
+        BuildOptions buildOptions = arguments.getReceiver(BuildOptions.class);
+        ConfigOptions configOptions = arguments.getReceiver(ConfigOptions.class);
+        SmithyBuildConfig smithyBuildConfig = configOptions.createSmithyBuildConfig();
+        Options options = arguments.getReceiver(Options.class);
+
+        // Resolve dependencies to use for packaging
+        DependencyResolver baseResolver = dependencyResolverFactory.create(smithyBuildConfig, env);
+
+        // Packaged artifacts should not contain dependency ranges, so we need to
+        // resolve the runtimeDependencies so no ranges are used for the artifact pom.xml
+        MavenConfig maven = smithyBuildConfig.getMaven().get();
+
+        // Set up a resolver that does not filter out the Smithy deps
+        List<ResolvedArtifact> allDeps = ConfigurationUtils.resolveArtifacts(smithyBuildConfig, maven, baseResolver);
+        List<ResolvedArtifact> runtimeDeps = filterOutBuildDeps(maven, allDeps);
+        LOGGER.warning("FOUND RUNTIME DEPS: " + runtimeDeps);
+
+        List<Path> allDepPaths = allDeps.stream().map(ResolvedArtifact::getPath)
+                .collect(Collectors.toList());
+        String buildClasspath = getClasspathFromEnv(allDepPaths, env);
+        LOGGER.warning("FOUND CLASSPATH : " + buildClasspath);
+
+        // Prepare the config so it contains the build info
+        // TODO: Improve the approach to get a prepared config
+        smithyBuildConfig = SmithyBuild.create(env.classLoader()).config(smithyBuildConfig).getPreparedConfig();
+        LOGGER.warning("PROJECTIONS " + smithyBuildConfig.getProjections());
+
+        // List through each of the projections
+        // TODO: Maybe just go through the directories?
+        Path outputDirectory = buildOptions.resolveOutput(smithyBuildConfig);
+        if (options.projection != null) {
+            ProjectionConfig projectionConfig = smithyBuildConfig.getProjections().get(options.projection);
+            if (projectionConfig == null) {
+                throw new CliError("Could not find projection `" + options
+                        + "` in build config.");
+            }
+            projectionConfig.getPackaging().ifPresent(p -> {
+                packageProjection(options.projection, p, outputDirectory, runtimeDeps, buildClasspath);
+            });
+        } else {
+            for (Map.Entry<String, ProjectionConfig> projectionEntry : smithyBuildConfig.getProjections().entrySet()) {
+                LOGGER.warning("PACKAGING PROJECTION " + projectionEntry.getKey());
+                LOGGER.warning("PACKAGING WITH PACKAGING? " + projectionEntry.getValue().getPackaging().isPresent());
+                projectionEntry.getValue().getPackaging().ifPresent(p -> {
+                    packageProjection(projectionEntry.getKey(), p, outputDirectory, runtimeDeps, buildClasspath);
+                });
+            }
+        }
+        return 0;
+    }
+
     private static final class Options implements ArgumentReceiver {
         private String projection;
 
@@ -108,54 +162,40 @@ final class PackageCommand implements Command {
         }
     }
 
-    private int run(Arguments arguments, Env env) {
-        ConfigOptions configOptions = arguments.getReceiver(ConfigOptions.class);
-        BuildOptions buildOptions = arguments.getReceiver(BuildOptions.class);
-        SmithyBuildConfig smithyBuildConfig = configOptions.createSmithyBuildConfig();
-        Options options = arguments.getReceiver(Options.class);
+    // TODO: How to get smithy-model, smithy-util, etc into the classpath?
+    private String getClasspathFromEnv(List<Path> artifacts, Env env) {
+        try (URLClassLoader loader = createClassLoaderFromPaths(artifacts, env.classLoader())) {
+            return Arrays.stream(loader.getURLs())
+                    .map(URL::getPath)
+                    .collect(Collectors.joining(":")) + ":";
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
 
-        // Resolve dependencies to use for packaging
-        List<ResolvedArtifact> runtimeDeps = resolveRuntimeDependencies(smithyBuildConfig, buildOptions, env);
-        LOGGER.warning("FOUND RUNTIME DEPS: " + runtimeDeps);
+    private static URLClassLoader createClassLoaderFromPaths(Collection<Path> artifacts, ClassLoader parent) {
+        return new URLClassLoader(createUrlsFromPaths(artifacts), parent);
+    }
 
-        // Prepare the config so it contains the build info
-        // TODO: Improve the approach to get a prepared config
-        smithyBuildConfig = SmithyBuild.create(env.classLoader()).config(smithyBuildConfig).getPreparedConfig();
-
-        LOGGER.warning("PROJECTIONS " + smithyBuildConfig.getProjections());
-
-        // List through each of the projections
-        // TODO: Maybe just go through the directories?
-        Path outputDirectory = buildOptions.resolveOutput(smithyBuildConfig);
-        if (options.projection != null) {
-            ProjectionConfig projectionConfig = smithyBuildConfig.getProjections().get(options.projection);
-            if (projectionConfig == null) {
-                throw new CliError("Could not find projection `" + options
-                        + "` in build config.");
-            }
-            projectionConfig.getPackaging().ifPresent(p -> {
-                packageProjection(options.projection, p, outputDirectory, runtimeDeps);
-            });
-        } else {
-            for (Map.Entry<String, ProjectionConfig> projectionEntry : smithyBuildConfig.getProjections().entrySet()) {
-                LOGGER.warning("PACKAGING PROJECTION " + projectionEntry.getKey());
-                LOGGER.warning("PACKAGING WITH PACKAGING? " + projectionEntry.getValue().getPackaging().isPresent());
-                projectionEntry.getValue().getPackaging().ifPresent(p -> {
-                    packageProjection(projectionEntry.getKey(), p, outputDirectory, runtimeDeps);
-                });
+    private static URL[] createUrlsFromPaths(Collection<Path> paths) {
+        URL[] urls = new URL[paths.size()];
+        int i = 0;
+        for (Path artifact : paths) {
+            try {
+                urls[i++] = artifact.toUri().toURL();
+            } catch (MalformedURLException e) {
+                throw new CliError("Error creating class loader: " + artifact);
             }
         }
-        return 0;
+        return urls;
     }
 
-    private void compileTraitCodegenCode(Path traitCodegenPath) {
-
-    }
 
     private void packageProjection(String name,
                                    PackagingConfig config,
                                    Path outputDirectory,
-                                   List<ResolvedArtifact> runtimeDeps
+                                   List<ResolvedArtifact> runtimeDeps,
+                                   String buildClasspath
     ) {
         Path sourcesPath = outputDirectory.resolve(name).resolve(SOURCES);
         if (!Files.exists(sourcesPath)) {
@@ -166,7 +206,8 @@ final class PackageCommand implements Command {
         validateConfig(config, name);
 
         // Get a file manifest scoped to the ${outputDir}/${projection}/release/jar/
-        FileManifest pluginPackagingManifest = FileManifest.create(outputDirectory.resolve(name).resolve(PACKAGING_OUTPUT));
+        FileManifest pluginPackagingManifest = FileManifest.create(outputDirectory.resolve(name)
+                .resolve(PACKAGING_OUTPUT));
 
         // Write pom file
         PomFile pom = new PomFile(config.getArtifactId().get(), config.getGroupId().get(), config.getVersion().get());
@@ -175,13 +216,30 @@ final class PackageCommand implements Command {
         pom.write(pluginPackagingManifest);
 
         // TODO: add trait codegen?
+        // if trait codegen is found, execute trait codegen compilation
+        Path traitCodegenPluginPath = outputDirectory.resolve(name).resolve(TRAIT_CODEGEN);
+        if (Files.exists(traitCodegenPluginPath)) {
+            LOGGER.warning("EXECUTING TRAIT CODEGEN COMPILATION...");
+            LOGGER.warning("COMPILATION ROOT PATH : " + traitCodegenPluginPath);
+            List<String> args = new ArrayList<>(ListUtils.of("javac", "--class-path", buildClasspath, "-d", "compiled"));
+            // Add all source files
+            args.addAll(listContents(traitCodegenPluginPath.toFile()).stream()
+                    .map(traitCodegenPluginPath::relativize)
+                    .map(Path::toString)
+                    .filter(p -> p.contains(".java"))
+                    .collect(Collectors.toList()));
+            LOGGER.warning("Executing javac with args: " + args);
+            exec(args, traitCodegenPluginPath);
+        }
+
         Path jarFilePath = pluginPackagingManifest.addFile(Paths.get(
                 config.getArtifactId().get() + "-" + config.getVersion().get() + ".jar"));
         try (JarOutputStream jos = new JarOutputStream(Files.newOutputStream(jarFilePath), getJarManifest(config))) {
-            addSourcesPluginFiles(sourcesPath, jos);
-            Path traitCodegenPluginPath = outputDirectory.resolve(name).resolve(SOURCES);
+            addFilesToJar(sourcesPath, SMITHY_SOURCE_PREFIX, jos);
+            // Copy all trait codegen code if available
             if (Files.exists(traitCodegenPluginPath)) {
-                compileTraitCodegenCode(traitCodegenPluginPath);
+                addFilesToJar(traitCodegenPluginPath.resolve("META-INF"), "META-INF/", jos);
+                addFilesToJar(traitCodegenPluginPath.resolve("compiled"), "", jos);
             }
         } catch (IOException exc) {
             throw new UncheckedIOException(exc);
@@ -190,10 +248,21 @@ final class PackageCommand implements Command {
         LOGGER.warning("PACKAGING PROJECTION: " + name);
     }
 
-    private void addSourcesPluginFiles(Path sourcesPath, JarOutputStream jos) throws IOException {
-        for (Path srcsPath : listContents(sourcesPath.toFile())) {
-            String jarPath = getJarPath(sourcesPath, SMITHY_SOURCE_PREFIX, srcsPath);
-            writeJarEntry(jarPath, srcsPath, jos);
+    // Extract out common
+    private static String exec(List<String> args, Path directory) {
+        StringBuilder output = new StringBuilder();
+        int code = IoUtils.runCommand(args, directory, output, Collections.emptyMap());
+        if (code != 0) {
+            String errorPrefix = "Unable to run `" + String.join(" ", args) + "`";
+            throw new CliError(errorPrefix + ": " + output);
+        }
+        return output.toString();
+    }
+
+    private void addFilesToJar(Path sourcePath, String prefix, JarOutputStream jos) throws IOException {
+        for (Path src : listContents(sourcePath.toFile())) {
+            String jarPath = prefix + sourcePath.relativize(src);
+            writeJarEntry(jarPath, src, jos);
         }
     }
 
@@ -203,18 +272,13 @@ final class PackageCommand implements Command {
         }
     }
 
-    private String getJarPath(Path root, String prefix, Path src) {
-        return prefix + root.relativize(src);
-    }
-
     public List<Path> listContents(File directory) {
-        LOGGER.warning("LISTING FOR " + directory);
         List<Path> contents = new ArrayList<>();
-        for (final File fileEntry : Objects.requireNonNull(directory.listFiles())) {
+        for (File fileEntry : Objects.requireNonNull(directory.listFiles())) {
             if (fileEntry.isDirectory()) {
-                contents.addAll(listContents(fileEntry));
+                    contents.addAll(listContents(fileEntry));
             } else {
-                contents.add(fileEntry.toPath());
+                contents.add(Objects.requireNonNull(fileEntry).toPath());
             }
         }
         return contents;
@@ -262,28 +326,15 @@ final class PackageCommand implements Command {
         return manifest;
     }
 
-    private List<ResolvedArtifact> resolveRuntimeDependencies(SmithyBuildConfig smithyBuildConfig,
-                                                              BuildOptions buildOptions,
-                                                              Env env
-    ) {
-        DependencyResolver baseResolver = dependencyResolverFactory.create(smithyBuildConfig, env);
 
-        // Packaged artifacts should not contain dependency ranges, so we need to
-        // resolve the runtimeDependencies so no ranges are used for the artifact pom.xml
-        MavenConfig maven = smithyBuildConfig.getMaven().get();
-        List<ResolvedArtifact> allDeps = ConfigurationUtils.resolveArtifactsWithFileCache(
-                smithyBuildConfig, buildOptions, maven, baseResolver
-        );
-
+    private List<ResolvedArtifact> filterOutBuildDeps(MavenConfig maven, List<ResolvedArtifact> allDeps) {
         // Filter out build-plugin deps
         List<String> versionTrimmedDeps = maven.getDependencies().stream()
                 .map(PackageCommand::trimVersion)
                 .collect(Collectors.toList());
-        List<ResolvedArtifact> runtimeDeps = allDeps.stream()
+        return allDeps.stream()
                 .filter(d -> versionTrimmedDeps.contains(trimVersion(d.getCoordinates())))
                 .collect(Collectors.toList());
-
-        return runtimeDeps;
     }
 
     private static String trimVersion(String coordinates) {

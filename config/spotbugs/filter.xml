@@ -194,4 +194,10 @@
         <Bug pattern="DE_MIGHT_IGNORE"/>
     </Match>
 
+    <!-- Objects.requirenonnull already checks null in question -->
+    <Match>
+        <Class name="software.amazon.smithy.cli.commands.PackageCommand"/>
+        <Bug pattern="NP_NULL_ON_SOME_PATH_FROM_RETURN_VALUE"/>
+    </Match>
+
 </FindBugsFilter>

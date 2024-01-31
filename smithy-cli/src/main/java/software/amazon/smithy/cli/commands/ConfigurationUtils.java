@@ -76,18 +76,10 @@ final class ConfigurationUtils {
      *
      * @return list of resolved artifacts.
      */
-    public static List<ResolvedArtifact> resolveArtifactsWithFileCache(SmithyBuildConfig smithyBuildConfig,
-                                                                BuildOptions buildOptions,
-                                                                MavenConfig maven,
-                                                                DependencyResolver baseResolver
-
+    public static List<ResolvedArtifact> resolveArtifacts(SmithyBuildConfig smithyBuildConfig,
+                                                            MavenConfig maven,
+                                                            DependencyResolver resolver
     ) {
-        long lastModified = smithyBuildConfig.getLastModifiedInMillis();
-        DependencyResolver delegate = new FilterCliVersionResolver(SmithyCli.getVersion(), baseResolver);
-        DependencyResolver resolver = new FileCacheResolver(getCacheFile(buildOptions, smithyBuildConfig),
-                lastModified,
-                delegate);
-
         Set<MavenRepository> repositories = ConfigurationUtils.getConfiguredMavenRepos(smithyBuildConfig);
         repositories.forEach(resolver::addRepository);
 
@@ -115,7 +107,7 @@ final class ConfigurationUtils {
         return artifacts;
     }
 
-    private static File getCacheFile(BuildOptions buildOptions, SmithyBuildConfig config) {
+    public static File getCacheFile(BuildOptions buildOptions, SmithyBuildConfig config) {
         return buildOptions.resolveOutput(config).resolve("classpath.json").toFile();
     }
 
