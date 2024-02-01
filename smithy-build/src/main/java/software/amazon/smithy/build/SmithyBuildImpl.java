@@ -132,7 +132,6 @@ final class SmithyBuildImpl {
         if (!config.getProjections().containsKey("source")) {
             Map<String, ProjectionConfig> projections = new HashMap<>(config.getProjections());
             ProjectionConfig.Builder sourceProjectionConfigBuilder = ProjectionConfig.builder();
-            config.getPackaging().ifPresent(sourceProjectionConfigBuilder::packaging);
             projections.put("source", sourceProjectionConfigBuilder.build());
             config = config.toBuilder().projections(projections).build();
         }

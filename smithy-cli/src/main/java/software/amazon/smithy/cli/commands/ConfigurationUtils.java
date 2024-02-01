@@ -6,9 +6,12 @@
 package software.amazon.smithy.cli.commands;
 
 import java.io.File;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.logging.Logger;
@@ -135,5 +138,18 @@ final class ConfigurationUtils {
             hashCode = (hashCode ^ text.charAt(i)) * FNV_PRIME;
         }
         return hashCode;
+    }
+
+    // TODO: Move to a different utility?
+    public static List<Path> listContents(File directory) {
+        List<Path> contents = new ArrayList<>();
+        for (File fileEntry : Objects.requireNonNull(directory.listFiles())) {
+            if (fileEntry.isDirectory()) {
+                contents.addAll(listContents(fileEntry));
+            } else {
+                contents.add(Objects.requireNonNull(fileEntry).toPath());
+            }
+        }
+        return contents;
     }
 }

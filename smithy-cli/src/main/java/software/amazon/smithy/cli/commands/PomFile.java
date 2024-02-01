@@ -9,7 +9,6 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 import javax.xml.parsers.DocumentBuilder;
@@ -24,7 +23,6 @@ import javax.xml.transform.stream.StreamResult;
 import org.w3c.dom.Attr;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
-import software.amazon.smithy.build.FileManifest;
 import software.amazon.smithy.build.SmithyBuildException;
 import software.amazon.smithy.cli.dependencies.ResolvedArtifact;
 import software.amazon.smithy.model.node.Node;
@@ -136,10 +134,7 @@ final class PomFile {
     }
 
     // TODO: docs
-    public void write(FileManifest manifest) {
-        // Poms are usually named ${artifactId}-${version}.pom by both Gradle and
-        // maven. We follow the same convention here.
-        Path outputFilePath = manifest.addFile(Paths.get(artifactId + "-" + version + ".pom"));
+    public void write(Path outputPath) {
         try {
             TransformerFactory transformerFactory = TransformerFactory.newInstance();
             Transformer transformer = transformerFactory.newTransformer();
@@ -147,7 +142,7 @@ final class PomFile {
             // Improves readability of generated POM
             transformer.setOutputProperty(OutputKeys.INDENT, "yes");
             DOMSource source = new DOMSource(doc);
-            StreamResult result = new StreamResult(Files.newOutputStream(outputFilePath));
+            StreamResult result = new StreamResult(Files.newOutputStream(outputPath));
             transformer.transform(source, result);
         } catch (TransformerException e) {
             throw new RuntimeException(e);

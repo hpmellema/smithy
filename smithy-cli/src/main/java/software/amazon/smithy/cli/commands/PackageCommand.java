@@ -8,7 +8,7 @@ package software.amazon.smithy.cli.commands;
 import com.sun.source.util.JavacTask;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
+import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.io.UncheckedIOException;
 import java.net.MalformedURLException;
@@ -17,19 +17,16 @@ import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Date;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
-import java.util.jar.Attributes;
-import java.util.jar.JarEntry;
-import java.util.jar.JarOutputStream;
-import java.util.jar.Manifest;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import javax.tools.DiagnosticCollector;
@@ -38,7 +35,6 @@ import javax.tools.JavaFileObject;
 import javax.tools.StandardJavaFileManager;
 import javax.tools.ToolProvider;
 import software.amazon.smithy.build.FileManifest;
-import software.amazon.smithy.build.SmithyBuild;
 import software.amazon.smithy.build.model.MavenConfig;
 import software.amazon.smithy.build.model.PackagingConfig;
 import software.amazon.smithy.build.model.ProjectionConfig;
@@ -46,21 +42,23 @@ import software.amazon.smithy.build.model.SmithyBuildConfig;
 import software.amazon.smithy.cli.ArgumentReceiver;
 import software.amazon.smithy.cli.Arguments;
 import software.amazon.smithy.cli.CliError;
+import software.amazon.smithy.cli.CliPrinter;
+import software.amazon.smithy.cli.ColorBuffer;
+import software.amazon.smithy.cli.ColorFormatter;
+import software.amazon.smithy.cli.ColorTheme;
 import software.amazon.smithy.cli.Command;
 import software.amazon.smithy.cli.HelpPrinter;
-import software.amazon.smithy.cli.SmithyCli;
+import software.amazon.smithy.cli.StandardOptions;
 import software.amazon.smithy.cli.dependencies.DependencyResolver;
 import software.amazon.smithy.cli.dependencies.ResolvedArtifact;
 import software.amazon.smithy.utils.ListUtils;
+import software.amazon.smithy.utils.MapUtils;
 
 final class PackageCommand implements Command {
     private static final Logger LOGGER = Logger.getLogger(PackageCommand.class.getName());
     private static final String SOURCES = "sources";
     private static final String SMITHY_SOURCE_PREFIX = "META-INF/smithy/";
     private static final String TRAIT_CODEGEN = "trait-codegen";
-    private static final int BUFFER_SIZE = 1024;
-    private static final String BUILD_TIMESTAMP_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSSZ";
-    // TODO: Make this per-packager?
     private static final String PACKAGING_OUTPUT = "release/jar";
 
     private final DependencyResolver.Factory dependencyResolverFactory;
@@ -92,58 +90,6 @@ final class PackageCommand implements Command {
         return action.apply(arguments, env);
     }
 
-    private int run(Arguments arguments, Env env) {
-        BuildOptions buildOptions = arguments.getReceiver(BuildOptions.class);
-        ConfigOptions configOptions = arguments.getReceiver(ConfigOptions.class);
-        SmithyBuildConfig smithyBuildConfig = configOptions.createSmithyBuildConfig();
-        Options options = arguments.getReceiver(Options.class);
-
-        // Resolve dependencies to use for packaging
-        DependencyResolver baseResolver = dependencyResolverFactory.create(smithyBuildConfig, env);
-
-        // Packaged artifacts should not contain dependency ranges, so we need to
-        // resolve the runtimeDependencies so no ranges are used for the artifact pom.xml
-        MavenConfig maven = smithyBuildConfig.getMaven().get();
-
-        // Set up a resolver that does not filter out the Smithy deps
-        List<ResolvedArtifact> allDeps = ConfigurationUtils.resolveArtifacts(smithyBuildConfig, maven, baseResolver);
-        List<ResolvedArtifact> runtimeDeps = filterOutBuildDeps(maven, allDeps);
-        LOGGER.fine(() -> String.format("Including the following artifacts as runtime dependencies: %s", runtimeDeps));
-
-        List<Path> allDepPaths = allDeps.stream().map(ResolvedArtifact::getPath)
-                .collect(Collectors.toList());
-        String buildClasspath = getClasspathFromEnv(allDepPaths, env);
-        LOGGER.warning("FOUND CLASSPATH : " + buildClasspath);
-
-        // Prepare the config so it contains the build info
-        // TODO: Improve the approach to get a prepared config
-        smithyBuildConfig = SmithyBuild.create(env.classLoader()).config(smithyBuildConfig).getPreparedConfig();
-        LOGGER.warning("PROJECTIONS " + smithyBuildConfig.getProjections());
-
-        // List through each of the projections
-        // TODO: Maybe just go through the directories?
-        Path outputDirectory = buildOptions.resolveOutput(smithyBuildConfig);
-        if (options.projection != null) {
-            ProjectionConfig projectionConfig = smithyBuildConfig.getProjections().get(options.projection);
-            if (projectionConfig == null) {
-                throw new CliError("Could not find projection `" + options
-                        + "` in build config.");
-            }
-            projectionConfig.getPackaging().ifPresent(p -> {
-                packageProjection(options.projection, p, outputDirectory, runtimeDeps, buildClasspath);
-            });
-        } else {
-            for (Map.Entry<String, ProjectionConfig> projectionEntry : smithyBuildConfig.getProjections().entrySet()) {
-                LOGGER.warning("PACKAGING PROJECTION " + projectionEntry.getKey());
-                LOGGER.warning("PACKAGING WITH PACKAGING? " + projectionEntry.getValue().getPackaging().isPresent());
-                projectionEntry.getValue().getPackaging().ifPresent(p -> {
-                    packageProjection(projectionEntry.getKey(), p, outputDirectory, runtimeDeps, buildClasspath);
-                });
-            }
-        }
-        return 0;
-    }
-
     private static final class Options implements ArgumentReceiver {
         private String projection;
 
@@ -160,9 +106,176 @@ final class PackageCommand implements Command {
             printer.param("--projection", null, "PROJECTION_NAME",
                     "Only package artifacts for this projection.");
         }
+
+        public Map<String, PackagingConfig> getPackagingConfigs(SmithyBuildConfig buildConfig) {
+            if (projection != null) {
+                ProjectionConfig projectionConfig = buildConfig.getProjections().get(projection);
+                if (projectionConfig == null) {
+                    throw new CliError("Could not find projection " + projection );
+
+                } else if (!projectionConfig.getPackaging().isPresent()){
+                    throw new CliError("Could not find packaging config for projection " + projection );
+                }
+                return MapUtils.of(projection, projectionConfig.getPackaging().get());
+            }
+            Map<String, PackagingConfig> packaging = new HashMap<>();
+            if (buildConfig.getPackaging().isPresent()) {
+                packaging.put("source", buildConfig.getPackaging().get());
+            }
+            for (Map.Entry<String, ProjectionConfig> projectionConfigEntry : buildConfig.getProjections().entrySet()) {
+                if (projectionConfigEntry.getValue().getPackaging().isPresent()) {
+                    packaging.put(projectionConfigEntry.getKey(),
+                            projectionConfigEntry.getValue().getPackaging().get());
+                } else {
+                    LOGGER.info("No packaging config found for projection " + projectionConfigEntry.getKey()
+                            + ". Skipping.");
+                }
+            }
+            return packaging;
+        }
     }
 
-    // TODO: How to get smithy-model, smithy-util, etc into the classpath?
+    private int run(Arguments arguments, Env env) {
+        BuildOptions buildOptions = arguments.getReceiver(BuildOptions.class);
+        ConfigOptions configOptions = arguments.getReceiver(ConfigOptions.class);
+        StandardOptions standardOptions = arguments.getReceiver(StandardOptions.class);
+        SmithyBuildConfig smithyBuildConfig = configOptions.createSmithyBuildConfig();
+        Options options = arguments.getReceiver(Options.class);
+        ResultConsumer consumer = new ResultConsumer(env.colors(), env.stderr(), standardOptions.quiet());
+
+        if (!standardOptions.quiet()) {
+            env.colors().println(env.stderr(), "Packaging projections...", ColorTheme.MUTED);
+            env.stderr().println("");
+        }
+
+        packageAllProjections(options.getPackagingConfigs(smithyBuildConfig),
+                smithyBuildConfig,
+                buildOptions,
+                env, consumer, consumer);
+
+        // Throw an exception if any errors occurred
+        if (!consumer.failedProjections.isEmpty()) {
+            consumer.failedProjections.sort(String::compareTo);
+            StringBuilder error = new StringBuilder();
+            try (ColorBuffer buffer = ColorBuffer.of(env.colors(), error)) {
+                buffer.println();
+                buffer.println(String.format(
+                        "Packaging failed for the following %d Smith projection(s): %s",
+                        consumer.failedProjections.size(),
+                        consumer.failedProjections));
+            }
+            throw new CliError(error.toString());
+        }
+
+        // Print out the summary
+        if (!standardOptions.quiet()) {
+            try (ColorBuffer buffer = ColorBuffer.of(env.colors(), env.stderr())) {
+                buffer.style(w -> w.append("Summary: "), ColorTheme.TEMPLATE_TITLE);
+                buffer.print(String.format("packaged %s artifacts for %s projections",
+                        consumer.artifactCount.get(),
+                        consumer.projectionCount.get()
+                ));
+                buffer.println();
+            }
+        }
+
+        return 0;
+    }
+
+    private static final class ResultConsumer implements Consumer<PackagingResult>, BiConsumer<String, Throwable> {
+        private final List<String> failedProjections = Collections.synchronizedList(new ArrayList<>());
+        private final AtomicInteger artifactCount = new AtomicInteger();
+        private final AtomicInteger projectionCount = new AtomicInteger();
+        private final boolean quiet;
+        private final ColorFormatter colors;
+        private final CliPrinter printer;
+
+        ResultConsumer(ColorFormatter colors, CliPrinter stderr, boolean quiet) {
+            this.colors = colors;
+            this.printer = stderr;
+            this.quiet = quiet;
+        }
+
+        @Override
+        public void accept(String name, Throwable exception) {
+            failedProjections.add(name);
+            StringWriter writer = new StringWriter();
+            writer.write(String.format("%nProjection %s failed packaging: %s%n", name, exception.toString()));
+            exception.printStackTrace(new PrintWriter(writer));
+            colors.println(printer, writer.toString(), ColorTheme.ERROR);
+        }
+
+        @Override
+        public void accept(PackagingResult result) {
+            try (ColorBuffer buffer = ColorBuffer.of(colors, printer)) {
+                // Increment projection count
+                projectionCount.incrementAndGet();
+
+                // Increment the total number of artifacts written.
+                artifactCount.addAndGet(result.manifest.getFiles().size());
+
+                if (!quiet) {
+                    int remainingLength = 80 - 6 - result.name.length();
+                    buffer.style(w -> {
+                        w.append("──  ");
+                        w.append(result.name);
+                        w.append("  ");
+                        for (int i = 0; i < remainingLength; i++) {
+                            w.append("─");
+                        }
+                        w.println();
+                    }, ColorTheme.NOTE);
+                    buffer.print("successfully packaged projection ")
+                            .append(result.name);
+                    if (result.includedTraits) {
+                        buffer.append(" (traits generated)");
+                    }
+                    buffer.println();
+                }
+
+                buffer.println();
+            }
+        }
+    }
+
+    private void packageAllProjections(Map<String, PackagingConfig> packagingConfigs,
+                                       SmithyBuildConfig smithyBuildConfig,
+                                       BuildOptions buildOptions,
+                                       Env env,
+                                       Consumer<PackagingResult> resultCallback,
+                                       BiConsumer<String, Throwable> exceptionCallback
+    ) {
+        // Resolve dependencies to use for packaging
+        DependencyResolver baseResolver = dependencyResolverFactory.create(smithyBuildConfig, env);
+
+        // Packaged artifacts should not contain dependency ranges, so we need to
+        // resolve the runtimeDependencies so no ranges are used for the artifact pom.xml
+        MavenConfig maven = smithyBuildConfig.getMaven().get();
+
+        // Set up a resolver that does not filter out the Smithy deps
+        List<ResolvedArtifact> allDeps = ConfigurationUtils.resolveArtifacts(smithyBuildConfig, maven, baseResolver);
+        List<ResolvedArtifact> runtimeDeps = filterOutBuildDeps(maven, allDeps);
+        LOGGER.fine(() -> String.format("Including the following artifacts as runtime dependencies: %s", runtimeDeps));
+
+        List<Path> allDepPaths = allDeps.stream().map(ResolvedArtifact::getPath)
+                .collect(Collectors.toList());
+        String buildClasspath = getClasspathFromEnv(allDepPaths, env);
+        LOGGER.fine(() -> String.format("Using the following classpath for packaging [%s]", buildClasspath));
+
+        Path outputDirectory = buildOptions.resolveOutput(smithyBuildConfig);
+
+        for (Map.Entry<String, PackagingConfig> entry : packagingConfigs.entrySet()) {
+            PackagingResult result = null;
+            try {
+                result = packageProjection(entry.getKey(), entry.getValue(),
+                        outputDirectory, runtimeDeps, buildClasspath);
+            } catch (Throwable exc){
+                exceptionCallback.accept(entry.getKey(), exc);
+            }
+            resultCallback.accept(result);
+        }
+    }
+
     private String getClasspathFromEnv(List<Path> artifacts, Env env) {
         try (URLClassLoader loader = createClassLoaderFromPaths(artifacts, env.classLoader())) {
             return Arrays.stream(loader.getURLs())
@@ -190,18 +303,30 @@ final class PackageCommand implements Command {
         return urls;
     }
 
+    private static final class PackagingResult {
+        private final String name;
+        private final FileManifest manifest;
+        private final boolean includedTraits;
 
-    private void packageProjection(String name,
-                                   PackagingConfig config,
-                                   Path outputDirectory,
-                                   List<ResolvedArtifact> runtimeDeps,
-                                   String buildClasspath
+        private PackagingResult(String name, FileManifest manifest, boolean includedTraits) {
+            this.name = name;
+            this.manifest = manifest;
+            this.includedTraits = includedTraits;
+        }
+    }
+
+    private PackagingResult packageProjection(String name,
+                                              PackagingConfig config,
+                                              Path outputDirectory,
+                                              List<ResolvedArtifact> runtimeDeps,
+                                              String buildClasspath
     ) {
         Path sourcesPath = outputDirectory.resolve(name).resolve(SOURCES);
         if (!Files.exists(sourcesPath)) {
             throw new CliError("Could not find generated artifacts for projection `" + name
                     + "`. Run `smithy build` before attempting to package build artifacts.");
         }
+
         // Check that config contains expected elements
         validateConfig(config, name);
 
@@ -210,72 +335,40 @@ final class PackageCommand implements Command {
                 .resolve(PACKAGING_OUTPUT));
 
         // Write pom file
+        // Poms are usually named ${artifactId}-${version}.pom by both Gradle and
+        // maven. We follow the same convention here.
+        Path pomPath = pluginPackagingManifest.addFile(Paths.get(config.getArtifactId().get() + "-"
+                + config.getVersion() + ".pom"));
         PomFile pom = new PomFile(config.getArtifactId().get(), config.getGroupId().get(), config.getVersion().get());
         pom.addDependencies(runtimeDeps);
         config.getPomData().ifPresent(pom::addAdditionalNodes);
-        pom.write(pluginPackagingManifest);
+        pom.write(pomPath);
 
-        // TODO: also create a sources jar if trait codegen exists
-        // Create the output jar artifact
+        // Create the output jar artifacts
         Path traitCodegenPluginPath = outputDirectory.resolve(name).resolve(TRAIT_CODEGEN);
-        // Add a sources jar if there are trait codegen artifacts
-        if (Files.exists(traitCodegenPluginPath)) {
-            LOGGER.warning("GENERATING SOURCES JAR");
-            Path srcsJarPath = pluginPackagingManifest.addFile(Paths.get(
-                    config.getArtifactId().get() + "-" + config.getVersion().get() + "-sources" + ".jar"));
-            createSourceJar(sourcesPath, traitCodegenPluginPath, srcsJarPath, config);
-        }
-        LOGGER.warning("GENERATING LIBRARY JAR");
         Path jarFilePath = pluginPackagingManifest.addFile(Paths.get(
                 config.getArtifactId().get() + "-" + config.getVersion().get() + ".jar"));
-        createBaseJar(sourcesPath, traitCodegenPluginPath, jarFilePath, config, buildClasspath);
-    }
+        JarFileBuilder baseJar = new JarFileBuilder(config);
+        baseJar.addSourceFiles(sourcesPath, SMITHY_SOURCE_PREFIX);
+        boolean includeTraits = Files.exists(traitCodegenPluginPath);
+        if (includeTraits) {
+            LOGGER.fine(() -> String.format("Writing sources jar for artifact: %s", config.getArtifactId()));
+            Path srcsJarPath = pluginPackagingManifest.addFile(Paths.get(
+                    config.getArtifactId().get() + "-" + config.getVersion().get() + "-sources" + ".jar"));
+            JarFileBuilder sourcesJar = new JarFileBuilder(config);
+            sourcesJar.addSourceFiles(sourcesPath, SMITHY_SOURCE_PREFIX);
+            sourcesJar.addSourceFiles(traitCodegenPluginPath, "", p -> !p.toString().contains("compiled/"));
+            sourcesJar.write(srcsJarPath);
 
-
-    private void createBaseJar(Path sourcesPath,
-                                      Path traitCodegenPluginPath,
-                                      Path jarFilePath,
-                                      PackagingConfig config,
-                                      String buildClasspath
-    ) {
-        try (JarOutputStream jos = new JarOutputStream(Files.newOutputStream(jarFilePath), getJarManifest(config))) {
-            addFilesToJar(sourcesPath, SMITHY_SOURCE_PREFIX, jos);
-            // if trait codegen is found, execute trait codegen compilation and copy all trait codegen
-            // service and class files into output jar
-            if (Files.exists(traitCodegenPluginPath)) {
-                Iterable<? extends JavaFileObject> generated = compileSources(buildClasspath, traitCodegenPluginPath);
-                addFilesToJar(traitCodegenPluginPath.resolve("META-INF"), "META-INF/", jos);
-                addJavaClassesToJar(generated, jos);
-            }
-        } catch (IOException exc) {
-            throw new UncheckedIOException(exc);
+            // Generate compiled sources and add them to the base jar along with any generated metadata files
+            LOGGER.fine(() -> String.format("Compiling generated trait sources for artifact %s with classpath: %s",
+                    config.getArtifactId(), buildClasspath));
+            baseJar.addClassFiles(compileSources(buildClasspath, traitCodegenPluginPath), "compiled/");
+            baseJar.addSourceFiles(traitCodegenPluginPath.resolve("META-INF"), "META-INF/");
         }
+        baseJar.write(jarFilePath);
 
-    }
-
-    // NOTE: only executed when trait codegen sources exist
-    private void createSourceJar(Path sourcesPath,
-                                        Path traitCodegenPluginPath,
-                                        Path jarFilePath,
-                                        PackagingConfig config
-    ) {
-        try (JarOutputStream jos = new JarOutputStream(Files.newOutputStream(jarFilePath), getJarManifest(config))) {
-            addFilesToJar(sourcesPath, SMITHY_SOURCE_PREFIX, jos);
-            addFilesToJar(traitCodegenPluginPath, "", jos);
-        } catch (IOException exc) {
-            throw new UncheckedIOException(exc);
-        }
-
-    }
-
-
-    private static void addJavaClassesToJar(Iterable<? extends JavaFileObject> generated, JarOutputStream jos)
-            throws IOException {
-        for (JavaFileObject classfile : generated) {
-            try (InputStream is = classfile.openInputStream()) {
-                writeJarEntry(classfile.getName().split("compiled/")[1], is, jos);
-            }
-        }
+        return new PackagingResult(name, pluginPackagingManifest, includeTraits);
     }
 
     private Iterable<? extends JavaFileObject> compileSources(String buildClasspath, Path rootPath) {
@@ -289,9 +382,9 @@ final class PackageCommand implements Command {
                 "-d", rootPath.toString() + "/compiled"));
         StringWriter out = new StringWriter();
         try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null)) {
-            LOGGER.warning("Starting compilation");
+            LOGGER.fine("Starting compilation");
             // Do not include any META-INF files in compilation targets
-            List<File> contents = listContents(rootPath.toFile())
+            List<File> contents = ConfigurationUtils.listContents(rootPath.toFile())
                     .stream()
                     .filter(p -> !p.toString().contains("META-INF"))
                     .filter(p -> !p.toString().contains("compiled"))
@@ -299,50 +392,12 @@ final class PackageCommand implements Command {
             Iterable<? extends JavaFileObject> compilationUnits = fileManager.getJavaFileObjectsFromFiles(contents);
             JavacTask task = (JavacTask) compiler.getTask(out, fileManager, diagnostics, options, null, compilationUnits);
             Iterable<? extends JavaFileObject>  generated = task.generate();
-            LOGGER.warning("COMPILATION FINISHED. Generated: " + generated);
+            LOGGER.fine(() -> String.format("Compilation Generated: [%s]", generated));
             return generated;
         } catch (IOException exception) {
             throw new CliError("Failed to compile Trait codegen classes. Compilation output: " + out);
         }
     }
-
-    private static void addFilesToJar(Path sourcePath, String prefix, JarOutputStream jos) throws IOException {
-        for (Path src : listContents(sourcePath.toFile())) {
-            String jarPath = prefix + sourcePath.relativize(src);
-            writeJarEntry(jarPath, src, jos);
-        }
-    }
-
-    private static void writeJarEntry(String fileName, Path path, JarOutputStream target) throws IOException {
-        try (InputStream is = Files.newInputStream(path)) {
-            writeJarEntry(fileName, is, target);
-        }
-    }
-
-    private static List<Path> listContents(File directory) {
-        List<Path> contents = new ArrayList<>();
-        for (File fileEntry : Objects.requireNonNull(directory.listFiles())) {
-            if (fileEntry.isDirectory()) {
-                    contents.addAll(listContents(fileEntry));
-            } else {
-                contents.add(Objects.requireNonNull(fileEntry).toPath());
-            }
-        }
-        return contents;
-    }
-
-    private static void writeJarEntry(String fileName, InputStream inputStream, JarOutputStream target)
-            throws IOException {
-        byte[] buffer = new byte[BUFFER_SIZE];
-        int bytesRead;
-
-        target.putNextEntry(new JarEntry(fileName));
-        while ((bytesRead = inputStream.read(buffer)) != -1) {
-            target.write(buffer, 0, bytesRead);
-        }
-        target.closeEntry();
-    }
-
 
     private static void validateConfig(PackagingConfig config, String projectionName) {
         config.getVersion().orElseThrow(
@@ -352,27 +407,6 @@ final class PackageCommand implements Command {
         config.getArtifactId().orElseThrow(
                 () -> new CliError("`artifactId` not configured for projection `" + projectionName + "`."));
     }
-
-
-    private static Manifest getJarManifest(PackagingConfig config) {
-        final Manifest manifest = new Manifest();
-        Attributes attributes = manifest.getMainAttributes();
-        attributes.put(Attributes.Name.MANIFEST_VERSION, "1.0");
-        attributes.put(new Attributes.Name("Build-Timestamp"),
-                new SimpleDateFormat(BUILD_TIMESTAMP_FORMAT).format(new Date()));
-        attributes.put(new Attributes.Name("Created-With"), "Smithy-Jar-Plugin (" + SmithyCli.getVersion() + ")");
-
-        if (!config.getTags().isEmpty()) {
-            attributes.put(new Attributes.Name("Smithy-Tags"), String.join(",", config.getTags()));
-        }
-
-        for (Map.Entry<String, String> headerEntry : config.getManifestHeaders().entrySet()) {
-            attributes.put(new Attributes.Name(headerEntry.getKey()), headerEntry.getValue());
-        }
-
-        return manifest;
-    }
-
 
     private static List<ResolvedArtifact> filterOutBuildDeps(MavenConfig maven, List<ResolvedArtifact> allDeps) {
         // Filter out build-plugin deps
