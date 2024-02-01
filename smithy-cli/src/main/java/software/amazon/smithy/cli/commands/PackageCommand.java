@@ -108,7 +108,7 @@ final class PackageCommand implements Command {
         // Set up a resolver that does not filter out the Smithy deps
         List<ResolvedArtifact> allDeps = ConfigurationUtils.resolveArtifacts(smithyBuildConfig, maven, baseResolver);
         List<ResolvedArtifact> runtimeDeps = filterOutBuildDeps(maven, allDeps);
-        LOGGER.warning("FOUND RUNTIME DEPS: " + runtimeDeps);
+        LOGGER.fine(() -> String.format("Including the following artifacts as runtime dependencies: %s", runtimeDeps));
 
         List<Path> allDepPaths = allDeps.stream().map(ResolvedArtifact::getPath)
                 .collect(Collectors.toList());
