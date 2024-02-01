@@ -5,9 +5,11 @@
 
 package software.amazon.smithy.cli.commands;
 
+import com.sun.source.util.JavacTask;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.StringWriter;
 import java.io.UncheckedIOException;
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -31,7 +33,10 @@ import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
+import javax.tools.DiagnosticCollector;
 import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.StandardJavaFileManager;
 import javax.tools.ToolProvider;
 import software.amazon.smithy.build.FileManifest;
 import software.amazon.smithy.build.SmithyBuild;
@@ -42,13 +47,10 @@ import software.amazon.smithy.build.model.SmithyBuildConfig;
 import software.amazon.smithy.cli.ArgumentReceiver;
 import software.amazon.smithy.cli.Arguments;
 import software.amazon.smithy.cli.CliError;
-import software.amazon.smithy.cli.ColorFormatter;
 import software.amazon.smithy.cli.Command;
 import software.amazon.smithy.cli.HelpPrinter;
 import software.amazon.smithy.cli.SmithyCli;
 import software.amazon.smithy.cli.dependencies.DependencyResolver;
-import software.amazon.smithy.cli.dependencies.FileCacheResolver;
-import software.amazon.smithy.cli.dependencies.FilterCliVersionResolver;
 import software.amazon.smithy.cli.dependencies.ResolvedArtifact;
 import software.amazon.smithy.utils.IoUtils;
 import software.amazon.smithy.utils.ListUtils;
@@ -60,11 +62,11 @@ final class PackageCommand implements Command {
     private static final String TRAIT_CODEGEN = "trait-codegen";
     private static final int BUFFER_SIZE = 1024;
     private static final String BUILD_TIMESTAMP_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSSZ";
+    // TODO: Make this per-packager?
     private static final String PACKAGING_OUTPUT = "release/jar";
 
     private final DependencyResolver.Factory dependencyResolverFactory;
     private final String parentCommandName;
-    // TODO: Make this per-packager?
 
     PackageCommand(String parentCommandName, DependencyResolver.Factory dependencyResolverFactory) {
         this.parentCommandName = parentCommandName;
@@ -215,31 +217,20 @@ final class PackageCommand implements Command {
         config.getPomData().ifPresent(pom::addAdditionalNodes);
         pom.write(pluginPackagingManifest);
 
-        // TODO: add trait codegen?
-        // if trait codegen is found, execute trait codegen compilation
+        // TODO: also create a sources jar if trait codegen exists
+        // Create the output jar artifact
         Path traitCodegenPluginPath = outputDirectory.resolve(name).resolve(TRAIT_CODEGEN);
-        if (Files.exists(traitCodegenPluginPath)) {
-            LOGGER.warning("EXECUTING TRAIT CODEGEN COMPILATION...");
-            LOGGER.warning("COMPILATION ROOT PATH : " + traitCodegenPluginPath);
-            List<String> args = new ArrayList<>(ListUtils.of("javac", "--class-path", buildClasspath, "-d", "compiled"));
-            // Add all source files
-            args.addAll(listContents(traitCodegenPluginPath.toFile()).stream()
-                    .map(traitCodegenPluginPath::relativize)
-                    .map(Path::toString)
-                    .filter(p -> p.contains(".java"))
-                    .collect(Collectors.toList()));
-            LOGGER.warning("Executing javac with args: " + args);
-            exec(args, traitCodegenPluginPath);
-        }
-
         Path jarFilePath = pluginPackagingManifest.addFile(Paths.get(
                 config.getArtifactId().get() + "-" + config.getVersion().get() + ".jar"));
         try (JarOutputStream jos = new JarOutputStream(Files.newOutputStream(jarFilePath), getJarManifest(config))) {
             addFilesToJar(sourcesPath, SMITHY_SOURCE_PREFIX, jos);
-            // Copy all trait codegen code if available
+
+            // if trait codegen is found, execute trait codegen compilation and copy all trait codegen
+            // service and class files into output jar
             if (Files.exists(traitCodegenPluginPath)) {
+                Iterable<? extends JavaFileObject> generated = compileSources(buildClasspath, traitCodegenPluginPath);
                 addFilesToJar(traitCodegenPluginPath.resolve("META-INF"), "META-INF/", jos);
-                addFilesToJar(traitCodegenPluginPath.resolve("compiled"), "", jos);
+                addJavaClassesToJar(generated, jos);
             }
         } catch (IOException exc) {
             throw new UncheckedIOException(exc);
@@ -248,18 +239,42 @@ final class PackageCommand implements Command {
         LOGGER.warning("PACKAGING PROJECTION: " + name);
     }
 
-    // Extract out common
-    private static String exec(List<String> args, Path directory) {
-        StringBuilder output = new StringBuilder();
-        int code = IoUtils.runCommand(args, directory, output, Collections.emptyMap());
-        if (code != 0) {
-            String errorPrefix = "Unable to run `" + String.join(" ", args) + "`";
-            throw new CliError(errorPrefix + ": " + output);
+    private static void addJavaClassesToJar(Iterable<? extends JavaFileObject> generated, JarOutputStream jos)
+            throws IOException {
+        for (JavaFileObject classfile : generated) {
+            try (InputStream is = classfile.openInputStream()) {
+                writeJarEntry(classfile.getName().replaceFirst("^compiled/",""), is, jos);
+            }
         }
-        return output.toString();
     }
 
-    private void addFilesToJar(Path sourcePath, String prefix, JarOutputStream jos) throws IOException {
+    private Iterable<? extends JavaFileObject> compileSources(String buildClasspath, Path rootPath) {
+        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        if (compiler == null) {
+            throw new CliError("Could not load jdk.compiler");
+        }
+
+        DiagnosticCollector<? super JavaFileObject> diagnostics = new DiagnosticCollector<>();
+        List<String> options = new ArrayList<>(ListUtils.of("--class-path", buildClasspath, "-d", "compiled"));
+        StringWriter out = new StringWriter();
+        try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null)) {
+            LOGGER.warning("Starting compilation");
+            // Do not include any META-INF files in compilation targets
+            List<File> contents = listContents(rootPath.toFile())
+                    .stream()
+                    .filter(p -> !p.toString().contains("META-INF"))
+                    .map(Path::toFile).collect(Collectors.toList());
+            Iterable<? extends JavaFileObject> compilationUnits = fileManager.getJavaFileObjectsFromFiles(contents);
+            JavacTask task = (JavacTask) compiler.getTask(out, fileManager, diagnostics, options, null, compilationUnits);
+            Iterable<? extends JavaFileObject>  generated = task.generate();
+            LOGGER.warning("COMPILATION FINISHED. Generated: " + generated);
+            return generated;
+        } catch (IOException exception) {
+            throw new CliError("Failed to compile Trait codegen classes. Compilation output: " + out);
+        }
+    }
+
+    private static void addFilesToJar(Path sourcePath, String prefix, JarOutputStream jos) throws IOException {
         for (Path src : listContents(sourcePath.toFile())) {
             String jarPath = prefix + sourcePath.relativize(src);
             writeJarEntry(jarPath, src, jos);
@@ -272,7 +287,7 @@ final class PackageCommand implements Command {
         }
     }
 
-    public List<Path> listContents(File directory) {
+    private static List<Path> listContents(File directory) {
         List<Path> contents = new ArrayList<>();
         for (File fileEntry : Objects.requireNonNull(directory.listFiles())) {
             if (fileEntry.isDirectory()) {
@@ -327,7 +342,7 @@ final class PackageCommand implements Command {
     }
 
 
-    private List<ResolvedArtifact> filterOutBuildDeps(MavenConfig maven, List<ResolvedArtifact> allDeps) {
+    private static List<ResolvedArtifact> filterOutBuildDeps(MavenConfig maven, List<ResolvedArtifact> allDeps) {
         // Filter out build-plugin deps
         List<String> versionTrimmedDeps = maven.getDependencies().stream()
                 .map(PackageCommand::trimVersion)
