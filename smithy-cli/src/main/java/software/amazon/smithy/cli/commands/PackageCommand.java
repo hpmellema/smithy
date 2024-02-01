@@ -21,7 +21,6 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -52,7 +51,6 @@ import software.amazon.smithy.cli.HelpPrinter;
 import software.amazon.smithy.cli.SmithyCli;
 import software.amazon.smithy.cli.dependencies.DependencyResolver;
 import software.amazon.smithy.cli.dependencies.ResolvedArtifact;
-import software.amazon.smithy.utils.IoUtils;
 import software.amazon.smithy.utils.ListUtils;
 
 final class PackageCommand implements Command {
@@ -220,11 +218,28 @@ final class PackageCommand implements Command {
         // TODO: also create a sources jar if trait codegen exists
         // Create the output jar artifact
         Path traitCodegenPluginPath = outputDirectory.resolve(name).resolve(TRAIT_CODEGEN);
+        // Add a sources jar if there are trait codegen artifacts
+        if (Files.exists(traitCodegenPluginPath)) {
+            LOGGER.warning("GENERATING SOURCES JAR");
+            Path srcsJarPath = pluginPackagingManifest.addFile(Paths.get(
+                    config.getArtifactId().get() + "-" + config.getVersion().get() + "-sources" + ".jar"));
+            createSourceJar(sourcesPath, traitCodegenPluginPath, srcsJarPath, config);
+        }
+        LOGGER.warning("GENERATING LIBRARY JAR");
         Path jarFilePath = pluginPackagingManifest.addFile(Paths.get(
                 config.getArtifactId().get() + "-" + config.getVersion().get() + ".jar"));
+        createBaseJar(sourcesPath, traitCodegenPluginPath, jarFilePath, config, buildClasspath);
+    }
+
+
+    private void createBaseJar(Path sourcesPath,
+                                      Path traitCodegenPluginPath,
+                                      Path jarFilePath,
+                                      PackagingConfig config,
+                                      String buildClasspath
+    ) {
         try (JarOutputStream jos = new JarOutputStream(Files.newOutputStream(jarFilePath), getJarManifest(config))) {
             addFilesToJar(sourcesPath, SMITHY_SOURCE_PREFIX, jos);
-
             // if trait codegen is found, execute trait codegen compilation and copy all trait codegen
             // service and class files into output jar
             if (Files.exists(traitCodegenPluginPath)) {
@@ -236,14 +251,29 @@ final class PackageCommand implements Command {
             throw new UncheckedIOException(exc);
         }
 
-        LOGGER.warning("PACKAGING PROJECTION: " + name);
     }
+
+    // NOTE: only executed when trait codegen sources exist
+    private void createSourceJar(Path sourcesPath,
+                                        Path traitCodegenPluginPath,
+                                        Path jarFilePath,
+                                        PackagingConfig config
+    ) {
+        try (JarOutputStream jos = new JarOutputStream(Files.newOutputStream(jarFilePath), getJarManifest(config))) {
+            addFilesToJar(sourcesPath, SMITHY_SOURCE_PREFIX, jos);
+            addFilesToJar(traitCodegenPluginPath, "", jos);
+        } catch (IOException exc) {
+            throw new UncheckedIOException(exc);
+        }
+
+    }
+
 
     private static void addJavaClassesToJar(Iterable<? extends JavaFileObject> generated, JarOutputStream jos)
             throws IOException {
         for (JavaFileObject classfile : generated) {
             try (InputStream is = classfile.openInputStream()) {
-                writeJarEntry(classfile.getName().replaceFirst("^compiled/",""), is, jos);
+                writeJarEntry(classfile.getName().split("compiled/")[1], is, jos);
             }
         }
     }
@@ -255,7 +285,8 @@ final class PackageCommand implements Command {
         }
 
         DiagnosticCollector<? super JavaFileObject> diagnostics = new DiagnosticCollector<>();
-        List<String> options = new ArrayList<>(ListUtils.of("--class-path", buildClasspath, "-d", "compiled"));
+        List<String> options = new ArrayList<>(ListUtils.of("--class-path", buildClasspath,
+                "-d", rootPath.toString() + "/compiled"));
         StringWriter out = new StringWriter();
         try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null)) {
             LOGGER.warning("Starting compilation");
@@ -263,6 +294,7 @@ final class PackageCommand implements Command {
             List<File> contents = listContents(rootPath.toFile())
                     .stream()
                     .filter(p -> !p.toString().contains("META-INF"))
+                    .filter(p -> !p.toString().contains("compiled"))
                     .map(Path::toFile).collect(Collectors.toList());
             Iterable<? extends JavaFileObject> compilationUnits = fileManager.getJavaFileObjectsFromFiles(contents);
             JavacTask task = (JavacTask) compiler.getTask(out, fileManager, diagnostics, options, null, compilationUnits);
