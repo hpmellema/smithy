@@ -21,7 +21,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -37,9 +36,7 @@ import javax.tools.ToolProvider;
 import software.amazon.smithy.build.FileManifest;
 import software.amazon.smithy.build.model.MavenConfig;
 import software.amazon.smithy.build.model.PackagingConfig;
-import software.amazon.smithy.build.model.ProjectionConfig;
 import software.amazon.smithy.build.model.SmithyBuildConfig;
-import software.amazon.smithy.cli.ArgumentReceiver;
 import software.amazon.smithy.cli.Arguments;
 import software.amazon.smithy.cli.CliError;
 import software.amazon.smithy.cli.CliPrinter;
@@ -47,12 +44,10 @@ import software.amazon.smithy.cli.ColorBuffer;
 import software.amazon.smithy.cli.ColorFormatter;
 import software.amazon.smithy.cli.ColorTheme;
 import software.amazon.smithy.cli.Command;
-import software.amazon.smithy.cli.HelpPrinter;
 import software.amazon.smithy.cli.StandardOptions;
 import software.amazon.smithy.cli.dependencies.DependencyResolver;
 import software.amazon.smithy.cli.dependencies.ResolvedArtifact;
 import software.amazon.smithy.utils.ListUtils;
-import software.amazon.smithy.utils.MapUtils;
 
 final class PackageCommand implements Command {
     private static final Logger LOGGER = Logger.getLogger(PackageCommand.class.getName());
@@ -83,56 +78,11 @@ final class PackageCommand implements Command {
     public int execute(Arguments arguments, Env env) {
         arguments.addReceiver(new ConfigOptions());
         arguments.addReceiver(new BuildOptions());
-        arguments.addReceiver(new Options());
+        arguments.addReceiver(new PackagingOptions());
 
         CommandAction action = HelpActionWrapper.fromCommand(this, parentCommandName, this::run);
 
         return action.apply(arguments, env);
-    }
-
-    private static final class Options implements ArgumentReceiver {
-        private String projection;
-
-        @Override
-        public Consumer<String> testParameter(String name) {
-            if (name.equals("--projection")) {
-                return value -> projection = value;
-            }
-            return null;
-        }
-
-        @Override
-        public void registerHelp(HelpPrinter printer) {
-            printer.param("--projection", null, "PROJECTION_NAME",
-                    "Only package artifacts for this projection.");
-        }
-
-        public Map<String, PackagingConfig> getPackagingConfigs(SmithyBuildConfig buildConfig) {
-            if (projection != null) {
-                ProjectionConfig projectionConfig = buildConfig.getProjections().get(projection);
-                if (projectionConfig == null) {
-                    throw new CliError("Could not find projection " + projection );
-
-                } else if (!projectionConfig.getPackaging().isPresent()){
-                    throw new CliError("Could not find packaging config for projection " + projection );
-                }
-                return MapUtils.of(projection, projectionConfig.getPackaging().get());
-            }
-            Map<String, PackagingConfig> packaging = new HashMap<>();
-            if (buildConfig.getPackaging().isPresent()) {
-                packaging.put("source", buildConfig.getPackaging().get());
-            }
-            for (Map.Entry<String, ProjectionConfig> projectionConfigEntry : buildConfig.getProjections().entrySet()) {
-                if (projectionConfigEntry.getValue().getPackaging().isPresent()) {
-                    packaging.put(projectionConfigEntry.getKey(),
-                            projectionConfigEntry.getValue().getPackaging().get());
-                } else {
-                    LOGGER.info("No packaging config found for projection " + projectionConfigEntry.getKey()
-                            + ". Skipping.");
-                }
-            }
-            return packaging;
-        }
     }
 
     private int run(Arguments arguments, Env env) {
@@ -140,7 +90,7 @@ final class PackageCommand implements Command {
         ConfigOptions configOptions = arguments.getReceiver(ConfigOptions.class);
         StandardOptions standardOptions = arguments.getReceiver(StandardOptions.class);
         SmithyBuildConfig smithyBuildConfig = configOptions.createSmithyBuildConfig();
-        Options options = arguments.getReceiver(Options.class);
+        PackagingOptions options = arguments.getReceiver(PackagingOptions.class);
         ResultConsumer consumer = new ResultConsumer(env.colors(), env.stderr(), standardOptions.quiet());
 
         if (!standardOptions.quiet()) {
