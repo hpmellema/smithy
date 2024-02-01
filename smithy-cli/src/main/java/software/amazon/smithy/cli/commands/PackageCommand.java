@@ -200,7 +200,7 @@ final class PackageCommand implements Command {
 
         // Packaged artifacts should not contain dependency ranges, so we need to
         // resolve the runtimeDependencies so no ranges are used for the artifact pom.xml
-        MavenConfig maven = smithyBuildConfig.getMaven().get();
+        MavenConfig maven = smithyBuildConfig.getMaven().orElse(null);
 
         // Set up a resolver that does not filter out the Smithy deps
         List<ResolvedArtifact> allDeps = ConfigurationUtils.resolveArtifacts(smithyBuildConfig, maven, baseResolver);
@@ -288,7 +288,7 @@ final class PackageCommand implements Command {
         // Poms are usually named ${artifactId}-${version}.pom by both Gradle and
         // maven. We follow the same convention here.
         Path pomPath = pluginPackagingManifest.addFile(Paths.get(config.getArtifactId().get() + "-"
-                + config.getVersion() + ".pom"));
+                + config.getVersion().get() + ".pom"));
         PomFile pom = new PomFile(config.getArtifactId().get(), config.getGroupId().get(), config.getVersion().get());
         pom.addDependencies(runtimeDeps);
         config.getPomData().ifPresent(pom::addAdditionalNodes);
@@ -360,6 +360,9 @@ final class PackageCommand implements Command {
 
     private static List<ResolvedArtifact> filterOutBuildDeps(MavenConfig maven, List<ResolvedArtifact> allDeps) {
         // Filter out build-plugin deps
+        if (maven == null) {
+            return allDeps;
+        }
         List<String> versionTrimmedDeps = maven.getDependencies().stream()
                 .map(PackageCommand::trimVersion)
                 .collect(Collectors.toList());

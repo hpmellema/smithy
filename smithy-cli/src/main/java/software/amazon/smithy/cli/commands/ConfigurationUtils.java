@@ -20,10 +20,7 @@ import software.amazon.smithy.build.model.MavenRepository;
 import software.amazon.smithy.build.model.SmithyBuildConfig;
 import software.amazon.smithy.cli.CliError;
 import software.amazon.smithy.cli.EnvironmentVariable;
-import software.amazon.smithy.cli.SmithyCli;
 import software.amazon.smithy.cli.dependencies.DependencyResolver;
-import software.amazon.smithy.cli.dependencies.FileCacheResolver;
-import software.amazon.smithy.cli.dependencies.FilterCliVersionResolver;
 import software.amazon.smithy.cli.dependencies.ResolvedArtifact;
 
 final class ConfigurationUtils {
@@ -99,7 +96,9 @@ final class ConfigurationUtils {
                     + lockFile.getDependencyCoordinateSet());
             lockFile.getDependencyCoordinateSet().forEach(resolver::addDependency);
         } else {
-            maven.getAllDependencies().forEach(resolver::addDependency);
+            if (maven != null) {
+                maven.getAllDependencies().forEach(resolver::addDependency);
+            }
         }
 
         List<ResolvedArtifact> artifacts = resolver.resolve();
