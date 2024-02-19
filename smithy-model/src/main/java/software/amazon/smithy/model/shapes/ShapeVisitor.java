@@ -199,4 +199,28 @@ public interface ShapeVisitor<R> {
             return getDefault(shape);
         }
     }
+
+
+    /**
+     * Creates a {@link ShapeVisitor} that only supports Data shapes and returns
+     * a value when necessary when visiting shapes.
+     *
+     * @param <R> Return type.
+     */
+    abstract class DataShapeVisitor<R> implements ShapeVisitor<R> {
+        @Override
+        public R operationShape(OperationShape shape) {
+            throw new UnsupportedOperationException("OperationShape not supported by DataShapeVisitor.");
+        }
+
+        @Override
+        public R resourceShape(ResourceShape shape) {
+            throw new UnsupportedOperationException("ResourceShape not supported by DataShapeVisitor.");
+        }
+
+        @Override
+        public R serviceShape(ServiceShape shape) {
+            throw new UnsupportedOperationException("ServiceShape not supported by DataShapeVisitor.");
+        }
+    }
 }
